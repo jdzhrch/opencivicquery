@@ -907,7 +907,30 @@ def test_call_context_defaults_to_empty_audit_fields() -> None:
     assert CallContext().audit_fields() == {
         "reporter_question": None,
         "connection_id": None,
+        "client_hash": None,
+        "client_capped": None,
     }
+
+
+def test_call_context_audits_a_client_hash_and_never_the_address() -> None:
+    from opencivicquery.client import identify
+
+    context = CallContext(client=identify("8.8.8.8"))
+    fields = context.audit_fields()
+
+    assert fields["client_hash"] is not None
+    assert len(fields["client_hash"]) == 12
+    assert fields["client_capped"] is True
+    assert "8.8.8.8" not in json.dumps(fields)
+    assert "8.8.8.8" not in repr(context)
+    assert context.capped_client_key == "8.8.8.8"
+
+
+def test_shared_clients_have_no_capped_key() -> None:
+    from opencivicquery.client import identify
+
+    assert CallContext(client=identify("0.0.0.0")).capped_client_key is None
+    assert CallContext().capped_client_key is None
 
 
 def test_snapshot_stays_evidence_only() -> None:

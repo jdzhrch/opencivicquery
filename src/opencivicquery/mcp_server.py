@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse
 
 from opencivicquery import __version__
 from opencivicquery.audit import AuditLogger
+from opencivicquery.client import ClientIdentity, client_address, identify
 from opencivicquery.config import ConfigurationError, RuntimeSettings, load_deployment
 from opencivicquery.limits import UsageLimiter, UsageLimitExceeded
 from opencivicquery.logging_redaction import install as install_log_redaction
@@ -134,10 +135,48 @@ def _connection_id(settings: RuntimeSettings) -> str | None:
     return hashlib.sha256(access_token.token.encode()).hexdigest()[:12]
 
 
-def _call_context(settings: RuntimeSettings, reporter_question: str | None) -> CallContext:
+_warned_peer_behind_proxy = False
+
+
+def _client_identity(
+    settings: RuntimeSettings, ctx: Context[AppState] | None
+) -> ClientIdentity | None:
+    """Usage identity for the caller. None under stdio, where the only user is local."""
+    global _warned_peer_behind_proxy
+    if settings.transport == "stdio" or ctx is None:
+        return None
+    service = ctx.request_context.lifespan_context.service
+    limits = service.bundle.config.limits
+    source = limits.client_address or "peer"
+    request = ctx.request_context.request
+    headers = getattr(request, "headers", None)
+    peer = getattr(getattr(request, "client", None), "host", None)
+    if (
+        source == "peer"
+        and limits.per_client_daily is not None
+        and not _warned_peer_behind_proxy
+        and headers is not None
+        and headers.get("x-forwarded-for")
+        and identify(peer).capped is False
+    ):
+        _warned_peer_behind_proxy = True
+        logging.getLogger(__name__).warning(
+            "The per-client cap reads the connection address, but requests arrive through "
+            "a proxy. Set limits.client_address to x-forwarded-for-last if the proxy "
+            "appends the client address."
+        )
+    return identify(client_address(headers, peer, source), service.bundle.shared_networks)
+
+
+def _call_context(
+    settings: RuntimeSettings,
+    reporter_question: str | None,
+    ctx: Context[AppState] | None = None,
+) -> CallContext:
     return CallContext(
         reporter_question=(reporter_question or "").strip() or None,
         connection_id=_connection_id(settings),
+        client=_client_identity(settings, ctx),
     )
 
 
@@ -322,7 +361,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         try:
             entries = await service.search_datasets(
                 actor_id=_actor_id(settings),
-                context=_call_context(settings, reporter_question),
+                context=_call_context(settings, reporter_question, ctx),
                 search_term=search_term,
                 limit=limit,
                 domain=domain,
@@ -349,7 +388,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         try:
             description = await service.describe_dataset(
                 actor_id=_actor_id(settings),
-                context=_call_context(settings, reporter_question),
+                context=_call_context(settings, reporter_question, ctx),
                 domain=domain,
                 dataset_id=dataset_id,
             )
@@ -395,7 +434,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             )
             response = await service.query_dataset(
                 actor_id=_actor_id(settings),
-                context=_call_context(settings, reporter_question),
+                context=_call_context(settings, reporter_question, ctx),
                 request=request,
             )
         except Exception as exc:
@@ -416,7 +455,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         try:
             reference = await service.pin_snapshot(
                 actor_id=_actor_id(settings),
-                context=_call_context(settings, None),
+                context=_call_context(settings, None, ctx),
                 snapshot_uri=snapshot_uri,
             )
         except Exception as exc:
@@ -438,7 +477,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         try:
             snapshot = await service.get_snapshot(
                 actor_id=_actor_id(settings),
-                context=_call_context(settings, None),
+                context=_call_context(settings, None, ctx),
                 snapshot_uri=snapshot_uri,
             )
         except Exception as exc:

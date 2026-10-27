@@ -115,6 +115,67 @@ def test_runtime_settings_bind_to_loopback_unless_told_otherwise(
     assert RuntimeSettings.from_environment().host == "0.0.0.0"
 
 
+def test_public_deployment_caps_each_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENCIVICQUERY_SOCRATA_APP_TOKEN", "test-token")
+    public = SF_PACK.parents[1] / "deployments" / "public.yaml"
+
+    limits = load_deployment(public).config.limits
+
+    assert limits.per_client_daily is not None
+    assert limits.per_client_daily < limits.daily_requests
+    assert limits.client_address == "x-forwarded-for-last"
+
+
+def test_public_deployment_treats_hosted_connectors_as_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opencivicquery.client import identify
+
+    monkeypatch.setenv("OPENCIVICQUERY_SOCRATA_APP_TOKEN", "test-token")
+    bundle = load_deployment(SF_PACK.parents[1] / "deployments" / "public.yaml")
+
+    # ChatGPT connector addresses seen in production logs, and Anthropic's outbound range.
+    for address in ("20.98.18.80", "20.98.18.94", "134.138.57.84", "160.79.105.3"):
+        assert identify(address, bundle.shared_networks).capped is False
+    assert identify("8.8.8.8", bundle.shared_networks).capped is True
+
+
+def test_per_client_cap_requires_an_explicit_address_source(
+    write_deployment: Callable[..., Path],
+) -> None:
+    path = write_deployment(
+        limits={"daily_requests": 10, "per_portal_per_minute": 10, "per_client_daily": 5}
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_deployment(path)
+
+
+def test_invalid_shared_networks_are_refused(write_deployment: Callable[..., Path]) -> None:
+    path = write_deployment(
+        limits={"daily_requests": 10, "per_portal_per_minute": 10, "shared_networks": ["x"]}
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_deployment(path)
+
+
+def test_a_broken_shared_networks_file_is_refused(
+    write_deployment: Callable[..., Path], tmp_path: Path
+) -> None:
+    (tmp_path / "bad.json").write_text("{}")
+    path = write_deployment(
+        limits={
+            "daily_requests": 10,
+            "per_portal_per_minute": 10,
+            "shared_networks_files": [str(tmp_path / "bad.json")],
+        }
+    )
+
+    with pytest.raises(ConfigurationError, match="shared networks"):
+        load_deployment(path)
+
+
 def test_container_image_binds_to_every_interface() -> None:
     dockerfile = (SF_PACK.parents[1] / "Dockerfile").read_text()
 

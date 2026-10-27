@@ -8,6 +8,17 @@ socrata:
 limits:
   daily_requests: 2000
   per_portal_per_minute: 60
+  # One IPv4 address or IPv6 /64. Cloud Run appends the real client address as the last
+  # X-Forwarded-For entry; every request reaches the container from an internal address.
+  per_client_daily: 200
+  client_address: x-forwarded-for-last
+  # Hosted AI connectors send many users' calls from a few addresses, so those calls skip
+  # the per-client cap and meet only the server-wide caps.
+  shared_networks:
+    - 160.79.104.0/21  # Anthropic outbound, platform.claude.com/docs/en/api/ip-addresses
+  shared_networks_files:
+    # openai.com/chatgpt-connectors.json, fetched 2026-10-27. Refresh it from that URL.
+    - shared-egress/openai-chatgpt-connectors.json
 packs:
   - ../packs/us-ca-san-francisco.yaml
   - ../packs/us-ny-new-york-city.yaml

@@ -9,6 +9,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from opencivicquery.client import Network, load_networks_file, parse_networks
 from opencivicquery.models import AccessConfig, DeploymentBundle, DeploymentConfig, SourcePack
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,15 @@ def load_deployment(
         digest.update(b"\0" + raw_pack)
         packs.append(pack)
 
+    shared: list[Network] = parse_networks(config.limits.shared_networks)
+    for relative in config.limits.shared_networks_files:
+        networks_path = (path.parent / relative).resolve()
+        try:
+            digest.update(b"\0" + networks_path.read_bytes())
+            shared.extend(load_networks_file(networks_path))
+        except (OSError, ValueError) as exc:
+            raise ConfigurationError(f"Invalid shared networks file: {networks_path}") from exc
+
     domains = [pack.domain for pack in packs]
     if len(domains) != len(set(domains)):
         raise ConfigurationError("Two source packs describe the same portal domain")
@@ -191,6 +201,7 @@ def load_deployment(
     return DeploymentBundle(
         config=config,
         packs=packs,
+        shared_networks=shared,
         socrata_app_token=token,
         config_sha256=digest.hexdigest(),
     )

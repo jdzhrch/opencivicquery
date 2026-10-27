@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from opencivicquery.audit import AuditLogger
+from opencivicquery.client import ClientIdentity, client_hash
 from opencivicquery.limits import CATALOG_KEY, UsageLimiter, UsageLimitExceeded
 from opencivicquery.models import (
     CatalogEntry,
@@ -49,11 +50,19 @@ class CallContext:
 
     reporter_question: str | None = None
     connection_id: str | None = None
+    client: ClientIdentity | None = None
+    """The caller's usage identity. None under stdio. The raw key is never audited."""
 
-    def audit_fields(self) -> dict[str, str | None]:
+    @property
+    def capped_client_key(self) -> str | None:
+        return self.client.key if self.client is not None and self.client.capped else None
+
+    def audit_fields(self) -> dict[str, Any]:
         return {
             "reporter_question": self.reporter_question,
             "connection_id": self.connection_id,
+            "client_hash": client_hash(self.client.key) if self.client else None,
+            "client_capped": self.client.capped if self.client else None,
         }
 
 
@@ -283,10 +292,16 @@ class OpenCivicQueryService:
         return self.source.cached_portal(_normalized(domain)) or CATALOG_KEY
 
     def _acquire(
-        self, action: str, actor: str, ctx: dict[str, Any], portal_key: str, start: float
+        self,
+        action: str,
+        actor: str,
+        ctx: dict[str, Any],
+        portal_key: str,
+        start: float,
+        client_key: str | None,
     ) -> None:
         try:
-            self.limiter.acquire(portal_key)
+            self.limiter.acquire(portal_key, client_key)
         except UsageLimitExceeded as exc:
             self._record(
                 action,
@@ -351,9 +366,12 @@ class OpenCivicQueryService:
         domain: str | None = None,
     ) -> list[CatalogEntry]:
         actor = self.authorize(actor_id)
-        ctx = (context or CallContext()).audit_fields()
+        call = context or CallContext()
+        ctx = call.audit_fields()
         start = perf_counter()
-        self._acquire("search_datasets", actor, ctx, self._portal_key(domain), start)
+        self._acquire(
+            "search_datasets", actor, ctx, self._portal_key(domain), start, call.capped_client_key
+        )
         try:
             async with asyncio.timeout(UPSTREAM_DEADLINE_SECONDS):
                 entries = await self.source.search(search_term, limit, domain=domain)
@@ -400,9 +418,12 @@ class OpenCivicQueryService:
         dataset_id: str,
     ) -> DatasetDescription:
         actor = self.authorize(actor_id)
-        ctx = (context or CallContext()).audit_fields()
+        call = context or CallContext()
+        ctx = call.audit_fields()
         start = perf_counter()
-        self._acquire("describe_dataset", actor, ctx, self._portal_key(domain), start)
+        self._acquire(
+            "describe_dataset", actor, ctx, self._portal_key(domain), start, call.capped_client_key
+        )
         try:
             async with asyncio.timeout(UPSTREAM_DEADLINE_SECONDS):
                 description = await self.source.describe(domain, dataset_id)
@@ -450,7 +471,8 @@ class OpenCivicQueryService:
         request: QueryRequest,
     ) -> QueryResponse:
         actor = self.authorize(actor_id)
-        ctx = (context or CallContext()).audit_fields()
+        call = context or CallContext()
+        ctx = call.audit_fields()
         start = perf_counter()
         try:
             self.source.validate_query(request)
@@ -468,7 +490,14 @@ class OpenCivicQueryService:
                 duration_ms=round((perf_counter() - start) * 1000),
             )
             raise
-        self._acquire("query_dataset", actor, ctx, self._portal_key(request.domain), start)
+        self._acquire(
+            "query_dataset",
+            actor,
+            ctx,
+            self._portal_key(request.domain),
+            start,
+            call.capped_client_key,
+        )
         warnings: list[str] = []
         try:
             async with asyncio.timeout(UPSTREAM_DEADLINE_SECONDS):
@@ -658,9 +687,10 @@ class OpenCivicQueryService:
         snapshot_uri: str,
     ) -> SnapshotReference:
         actor = self.authorize(actor_id)
-        ctx = (context or CallContext()).audit_fields()
+        call = context or CallContext()
+        ctx = call.audit_fields()
         start = perf_counter()
-        self._acquire("pin_snapshot", actor, ctx, SNAPSHOT_KEY, start)
+        self._acquire("pin_snapshot", actor, ctx, SNAPSHOT_KEY, start, call.capped_client_key)
         try:
             reference = await self.snapshot_store.pin(snapshot_uri)
         except Exception as exc:
@@ -693,9 +723,10 @@ class OpenCivicQueryService:
         snapshot_uri: str,
     ) -> QuerySnapshot:
         actor = self.authorize(actor_id)
-        ctx = (context or CallContext()).audit_fields()
+        call = context or CallContext()
+        ctx = call.audit_fields()
         start = perf_counter()
-        self._acquire("get_snapshot", actor, ctx, SNAPSHOT_KEY, start)
+        self._acquire("get_snapshot", actor, ctx, SNAPSHOT_KEY, start, call.capped_client_key)
         try:
             snapshot = await self.snapshot_store.get(snapshot_uri)
         except Exception as exc:

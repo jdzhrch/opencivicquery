@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import date, datetime
 from enum import StrEnum
@@ -167,6 +168,42 @@ class UsageLimits(BaseModel):
     """Tool calls that reach a data source, per UTC day."""
     per_portal_per_minute: int = Field(ge=1)
     """Tool calls against one portal (or the shared catalog) in any rolling minute."""
+    per_client_daily: int | None = Field(default=None, ge=1)
+    """Tool calls one client may make per UTC day. A client is one IPv4 address or one
+    IPv6 /64. None turns the per-client cap off, which suits a local install."""
+    client_address: Literal["peer", "x-forwarded-for-last"] | None = None
+    """Where to read the caller's address. Required with per_client_daily, so a forgotten
+    setting can never key every caller to the proxy's address. Cloud Run needs
+    x-forwarded-for-last, because every request reaches the container from an internal
+    proxy address."""
+    shared_networks: list[str] = Field(default_factory=list)
+    """CIDR ranges that carry many users at once, such as a hosted AI connector's egress.
+    Calls from them skip the per-client cap and still meet the server-wide caps."""
+    shared_networks_files: list[str] = Field(default_factory=list)
+    """Published egress lists ({"prefixes": [...]}), relative to the deployment file."""
+
+    @field_validator("shared_networks")
+    @classmethod
+    def validate_networks(cls, value: list[str]) -> list[str]:
+        for network in value:
+            try:
+                ipaddress.ip_network(network.strip(), strict=False)
+            except ValueError as exc:
+                raise ValueError(f"invalid network in shared_networks: {network}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def client_cap_is_complete(self) -> UsageLimits:
+        if self.per_client_daily is None:
+            return self
+        if self.per_client_daily > self.daily_requests:
+            raise ValueError("per_client_daily must not exceed daily_requests")
+        if self.client_address is None:
+            raise ValueError(
+                "per_client_daily needs client_address: 'peer', or 'x-forwarded-for-last' "
+                "behind one proxy that appends the client address, as Cloud Run does"
+            )
+        return self
 
 
 class DeploymentConfig(BaseModel):
@@ -187,6 +224,10 @@ class DeploymentBundle(BaseModel):
 
     config: DeploymentConfig
     packs: list[SourcePack]
+    shared_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = Field(
+        default_factory=list
+    )
+    """limits.shared_networks plus every listed file, parsed once at startup."""
     socrata_app_token: SecretStr | None
     config_sha256: str
     """Hash over the deployment file and every pack it loads, recorded in each snapshot."""

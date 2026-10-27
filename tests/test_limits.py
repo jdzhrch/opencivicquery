@@ -200,3 +200,79 @@ def test_default_clock_and_calendar_work_without_injection() -> None:
     with pytest.raises(UsageLimitExceeded) as caught:
         limits.acquire("data.sf.gov")
     assert caught.value.code == "DAILY_LIMIT_REACHED"
+
+
+def client_limiter(per_client: int, daily: int = 100) -> tuple[UsageLimiter, FakeTime]:
+    time = FakeTime()
+    return (
+        UsageLimiter(
+            UsageLimits(
+                daily_requests=daily,
+                per_portal_per_minute=100,
+                per_client_daily=per_client,
+                client_address="peer",
+            ),
+            clock=time.clock,
+            today=time.today,
+        ),
+        time,
+    )
+
+
+def test_per_client_cap_refuses_one_client_and_admits_another() -> None:
+    limits, _ = client_limiter(per_client=2)
+    limits.acquire("data.sf.gov", "203.0.113.7")
+    limits.acquire("data.cityofnewyork.us", "203.0.113.7")
+
+    with pytest.raises(UsageLimitExceeded) as caught:
+        limits.acquire(CATALOG_KEY, "203.0.113.7")
+    assert caught.value.code == "CLIENT_DAILY_LIMIT_REACHED"
+    limits.acquire("data.sf.gov", "203.0.113.8")
+
+
+def test_refused_client_calls_do_not_spend_the_shared_daily_allowance() -> None:
+    limits, _ = client_limiter(per_client=1, daily=3)
+    limits.acquire("data.sf.gov", "203.0.113.7")
+    for _ in range(5):
+        with pytest.raises(UsageLimitExceeded):
+            limits.acquire("data.sf.gov", "203.0.113.7")
+
+    limits.acquire("data.sf.gov", "203.0.113.8")
+    limits.acquire("data.sf.gov", "203.0.113.9")
+
+
+def test_per_client_counts_reset_on_a_new_utc_day() -> None:
+    limits, time = client_limiter(per_client=1)
+    limits.acquire("data.sf.gov", "203.0.113.7")
+    with pytest.raises(UsageLimitExceeded):
+        limits.acquire("data.sf.gov", "203.0.113.7")
+
+    time.day = "2026-10-28"
+    limits.acquire("data.sf.gov", "203.0.113.7")
+
+
+def test_a_call_without_a_client_key_skips_only_the_per_client_cap() -> None:
+    limits, _ = client_limiter(per_client=1, daily=2)
+    limits.acquire("data.sf.gov", None)
+    limits.acquire("data.sf.gov", None)
+
+    with pytest.raises(UsageLimitExceeded) as caught:
+        limits.acquire("data.sf.gov", None)
+    assert caught.value.code == "DAILY_LIMIT_REACHED"
+
+
+def test_without_a_per_client_cap_clients_are_not_tracked() -> None:
+    limits, _ = limiter(daily=10)
+    for _ in range(5):
+        limits.acquire("data.sf.gov", "203.0.113.7")
+    assert limits._client_counts == {}
+
+
+def test_per_client_cap_cannot_exceed_the_daily_cap() -> None:
+    with pytest.raises(ValueError, match="per_client_daily"):
+        UsageLimits(
+            daily_requests=10,
+            per_portal_per_minute=10,
+            per_client_daily=11,
+            client_address="peer",
+        )

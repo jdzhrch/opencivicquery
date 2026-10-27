@@ -36,7 +36,7 @@ https://opencivicquery-1040721507408.us-west1.run.app/mcp
 - **Claude Code:** `claude mcp add --transport http opencivicquery https://opencivicquery-1040721507408.us-west1.run.app/mcp`
 - **ChatGPT:** add it as a custom connector (MCP server) with no authentication, in developer mode or through your workspace admin.
 
-The hosted instance has daily and per-portal usage caps. For heavy use, run your own copy.
+The hosted instance caps each direct caller, such as Claude Code or a script, at 200 calls a day per IP address, on top of a server-wide daily cap. Claude and ChatGPT connectors reach the server from the vendors' own addresses on behalf of many users, so their calls count only toward the server-wide cap. Audit logs record a salted hash of the address, never the address itself. For heavy use, run your own copy.
 
 ## Quickstart: run it on your computer
 
@@ -103,6 +103,9 @@ A deployment file in `deployments/` sets:
 | `socrata.app_token_env` | Environment variable that holds a Socrata app token. Use one on any shared instance. |
 | `limits.daily_requests` | Calls that reach a data source or read a snapshot, per UTC day, per server process |
 | `limits.per_portal_per_minute` | Calls to one portal in any rolling minute, per server process |
+| `limits.per_client_daily` | Calls one client may make per UTC day, per server process. A client is one IPv4 address or one IPv6 /64. Leave it out for a local install. |
+| `limits.client_address` | Required with `per_client_daily`. `peer` reads the connection address; `x-forwarded-for-last` reads the last `X-Forwarded-For` entry. Use the second only behind exactly one proxy that appends the client address, as Cloud Run does. |
+| `limits.shared_networks`, `limits.shared_networks_files` | Address ranges that carry many users at once, such as hosted AI connectors. Their calls skip the per-client cap and meet only the server-wide caps. Files use the `{"prefixes": [...]}` format that OpenAI publishes. |
 | `packs` | Source pack files to load |
 | `access` | Who may sign in, used only when login is on |
 
@@ -121,6 +124,8 @@ Environment variables:
 Login is off by default. A newsroom that wants per-reporter attribution can turn on Google sign-in; see `deployments/newsroom-with-login.example.yaml` and the OAuth variables in `.env.example`. A deployment file with an `access` section refuses to start while login is off, so a forgotten setting never opens a private instance to everyone.
 
 The usage caps count per process. A deployment that runs two instances admits up to twice the configured numbers, so set the platform's instance ceiling as the outer bound on cost.
+
+The per-client cap raises the cost of abuse; it does not prevent it. Someone with ten addresses, or one IPv6 block, can still use up the server-wide daily allowance. The server-wide cap and the instance ceiling are what bound cost.
 
 ## Contributing a source pack
 

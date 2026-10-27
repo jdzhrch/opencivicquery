@@ -85,6 +85,7 @@ def build_test_server(
     write_deployment: Callable[..., Path],
     tmp_path: Path,
     resource_response: Callable[[], httpx.Response] | None = None,
+    settings_overrides: dict[str, Any] | None = None,
     **deployment: Any,
 ) -> tuple[Any, httpx.AsyncClient, list[httpx.Request], str]:
     requests: list[httpx.Request] = []
@@ -137,6 +138,7 @@ def build_test_server(
         config_path=config_path,
         snapshot_backend="local",
         snapshot_path=tmp_path / "snapshots",
+        **(settings_overrides or {}),
     )
     return mcp_server.create_server(settings), http_client, requests, logger_name
 
@@ -837,3 +839,106 @@ async def test_snapshot_rate_limit_becomes_a_tool_error(
         "refused",
         "snapshots",
     )
+
+
+def _post_query(client: TestClient, arguments: dict[str, Any], forwarded_for: str) -> dict:
+    response = client.post(
+        "/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-06-18",
+            "X-Forwarded-For": forwarded_for,
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "query_dataset", "arguments": arguments},
+        },
+    )
+    assert response.status_code == 200
+    return response.json()["result"]
+
+
+@pytest.mark.asyncio
+async def test_per_client_cap_uses_the_last_forwarded_address_and_resists_spoofing(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server, http_client, _, logger_name = build_test_server(
+        monkeypatch,
+        write_deployment,
+        tmp_path,
+        limits={
+            "daily_requests": 100,
+            "per_portal_per_minute": 100,
+            "per_client_daily": 2,
+            "client_address": "x-forwarded-for-last",
+        },
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    app = server.streamable_http_app(
+        streamable_http_path="/mcp", stateless_http=True, json_response=True
+    )
+    arguments = COMMON_ARGUMENTS | {"dataset_id": "e2st-aufe", "select": "count(*) as n"}
+    try:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+            # The proxy appends the real address last; whatever the caller sends in
+            # front of it must not create a fresh allowance.
+            first = _post_query(client, arguments, "8.8.8.8")
+            second = _post_query(client, arguments, "1.1.1.1, 8.8.8.8")
+            third = _post_query(client, arguments, "9.9.9.9,8.8.8.8")
+            other_client = _post_query(client, arguments, "8.8.4.4")
+    finally:
+        await http_client.aclose()
+
+    assert first["isError"] is False
+    assert second["isError"] is False
+    assert third["isError"] is True
+    assert third["structuredContent"]["error"]["code"] == "CLIENT_DAILY_LIMIT_REACHED"
+    assert other_client["isError"] is False
+    events = audit_events(caplog, logger_name)
+    hashes = [event["client_hash"] for event in events]
+    assert hashes[0] == hashes[1] == hashes[2] != hashes[3]
+    assert all("8.8.8.8" not in json.dumps(event) for event in events)
+    assert all(event["client_capped"] is True for event in events)
+
+
+@pytest.mark.asyncio
+async def test_ipv6_slash_64_is_one_client_and_shared_egress_is_not_capped(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    server, http_client, _, _ = build_test_server(
+        monkeypatch,
+        write_deployment,
+        tmp_path,
+        limits={
+            "daily_requests": 100,
+            "per_portal_per_minute": 100,
+            "per_client_daily": 1,
+            "client_address": "x-forwarded-for-last",
+            "shared_networks": ["20.98.18.80/28"],
+        },
+    )
+    app = server.streamable_http_app(
+        streamable_http_path="/mcp", stateless_http=True, json_response=True
+    )
+    arguments = COMMON_ARGUMENTS | {"dataset_id": "e2st-aufe", "select": "count(*) as n"}
+    try:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+            first = _post_query(client, arguments, "2606:4700:4700::1111")
+            rotated = _post_query(client, arguments, "2606:4700:4700:0:ffff::9")
+            connector_calls = [_post_query(client, arguments, "20.98.18.85") for _ in range(3)]
+            proxyless = [_post_query(client, arguments, "0.0.0.0") for _ in range(3)]
+    finally:
+        await http_client.aclose()
+
+    assert first["isError"] is False
+    assert rotated["structuredContent"]["error"]["code"] == "CLIENT_DAILY_LIMIT_REACHED"
+    # Many users share a hosted connector's egress, so it meets only the global caps.
+    assert all(result["isError"] is False for result in connector_calls)
+    assert all(result["isError"] is False for result in proxyless)
