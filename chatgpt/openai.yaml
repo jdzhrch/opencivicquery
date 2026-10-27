@@ -1,0 +1,9 @@
+interface:
+  display_name: "Ask Open Data"
+  short_description: "Answer questions from government open data, with evidence"
+  icon_small: "./assets/icon-256.png"
+  icon_large: "./assets/icon-256.png"
+  brand_color: "#0B5E66"
+  default_prompt: "Use $ask-open-data to answer a question from government open data."
+policy:
+  allow_implicit_invocation: true

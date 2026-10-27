@@ -1,0 +1,16 @@
+{
+  "name": "opencivicquery",
+  "owner": {
+    "name": "Rongcheng Zhang"
+  },
+  "metadata": {
+    "description": "OpenCivicQuery: ask government open data questions in Claude, with evidence a reporter can cite."
+  },
+  "plugins": [
+    {
+      "name": "opencivicquery",
+      "source": "./plugins/opencivicquery",
+      "description": "Connects Claude to the public OpenCivicQuery server and adds the Ask Open Data skill for reporters."
+    }
+  ]
+}

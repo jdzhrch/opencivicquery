@@ -1,0 +1,12 @@
+{
+  "name": "opencivicquery",
+  "displayName": "OpenCivicQuery",
+  "version": "0.1.0",
+  "description": "Ask questions of government open data on every Socrata portal, with the counting unit, completeness, the exact query, and evidence snapshots in every answer.",
+  "author": {
+    "name": "Rongcheng Zhang"
+  },
+  "homepage": "https://github.com/jdzhrch/opencivicquery",
+  "repository": "https://github.com/jdzhrch/opencivicquery",
+  "license": "MIT"
+}

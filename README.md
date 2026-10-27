@@ -24,17 +24,29 @@ Datasets without a pack still work. Their responses carry a warning that the row
 
 Current packs: San Francisco (`packs/us-ca-san-francisco.yaml`) and New York City (`packs/us-ny-new-york-city.yaml`). To add a city, see [Contributing a source pack](#contributing-a-source-pack).
 
-## Use the hosted instance
+## Install
 
-A public instance runs without login at:
+A public instance runs without login at `https://opencivicquery-1040721507408.us-west1.run.app/mcp`. The plugin connects to it and adds the **Ask Open Data** skill, which teaches the assistant how to turn a reporter's question into a countable one, compare periods, and hand back evidence an editor can check.
 
-```
-https://opencivicquery-1040721507408.us-west1.run.app/mcp
-```
+### Claude: the plugin
 
-- **Claude (web or desktop):** Settings, Connectors, Add custom connector, then paste the URL.
-- **Claude Code:** `claude mcp add --transport http opencivicquery https://opencivicquery-1040721507408.us-west1.run.app/mcp`
-- **ChatGPT:** add it as a custom connector (MCP server) with no authentication, in developer mode or through your workspace admin.
+- **Claude Code:** run `/plugin marketplace add jdzhrch/opencivicquery`, then `/plugin install opencivicquery@opencivicquery`.
+- **Claude Team or Enterprise:** an owner opens Organization settings, Plugins & skills, Add, Sync from GitHub, picks `jdzhrch/opencivicquery`, and keeps Sync automatically on. Every member gets the plugin, and each push to this repository updates it.
+
+### Claude: connection only
+
+In Claude on the web or desktop, open Settings, Connectors, Add custom connector, and paste the URL above. The server's own rules still apply; the skill is not included.
+
+### ChatGPT
+
+- **Business or Enterprise workspace:** an admin creates a custom app (MCP connector) with the URL above and no authentication, and copies its app ID (`asdk_app_...`). Then build the plugin package and publish it to the workspace:
+
+  ```bash
+  uv run python scripts/build_chatgpt_plugin.py --app-id asdk_app_YOUR_APP_ID
+  ```
+
+  The package in `dist/` holds the same skill as the Claude plugin. For a new version, rebuild and publish again; members do not reinstall.
+- **Individual accounts:** add the URL as a custom connector in developer mode. The skill is not included.
 
 The hosted instance caps each direct caller, such as Claude Code or a script, at 200 calls a day per IP address, on top of a server-wide daily cap. Claude and ChatGPT connectors reach the server from the vendors' own addresses on behalf of many users, so their calls count only toward the server-wide cap. Audit logs record a salted hash of the address, never the address itself. For heavy use, run your own copy.
 
@@ -134,6 +146,10 @@ The per-client cap raises the cost of abuse; it does not prevent it. Someone wit
 3. Write the profile: `row_grain`, `counting_guidance`, and `caveats`. Write only what the data or the agency's documentation supports. When the data contradicts the documentation, say so.
 4. Set `checked_on` to the date you checked.
 5. Add the pack to a deployment file and run the tests.
+
+## Plugin development
+
+The skill lives in `plugins/opencivicquery/skills/ask-open-data/`. Both the Claude plugin and the ChatGPT package use it, and the version in `plugins/opencivicquery/.claude-plugin/plugin.json` applies to both. Raise that version with every change to the skill or the connection.
 
 ## Development
 

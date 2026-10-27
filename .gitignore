@@ -16,3 +16,6 @@ snapshots/
 AGENTS.md
 MEMORY_INBOX.md
 operations/worklog.md
+
+# Built plugin packages
+dist/
