@@ -61,7 +61,7 @@ When the question has a time window, also run the previous equivalent window and
 - **A complaint or report count can move because reporting changed.** One person filing forty 311 requests moves the count. Say this where it applies.
 - **A count cannot answer a causal question.** Give the levels, name the limit in one sentence, and stop.
 
-The reference file [references/counting-traps.md](references/counting-traps.md) lists the traps that recur across civic datasets. Read it when a dataset has no source pack.
+The reference file [references/counting-traps.md](references/counting-traps.md) lists the traps that recur across civic datasets. Read it when a dataset has no source pack. Each trap is a pattern to check. When you use one in an answer, say it may apply unless the agency's documentation or a source pack confirms it, and add it to the questions for the agency.
 
 ## presentation_rules win
 
