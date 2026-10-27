@@ -61,6 +61,14 @@ def test_plugin_connects_to_the_documented_public_instance() -> None:
     assert url in (ROOT / "README.md").read_text()
 
 
+def test_skill_points_to_the_same_connection_as_the_plugin() -> None:
+    url = json.loads((PLUGIN / ".mcp.json").read_text())["mcpServers"]["opencivicquery"]["url"]
+    text = (SKILL / "SKILL.md").read_text()
+
+    assert url in text
+    assert "`list_source_packs`" in text.split("## How every request starts")[0]
+
+
 def test_skill_front_matter_names_the_skill_folder() -> None:
     fields = skill_frontmatter()
 

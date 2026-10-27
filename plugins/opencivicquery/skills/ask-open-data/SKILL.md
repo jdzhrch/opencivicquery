@@ -11,7 +11,9 @@ The people you are talking to are reporters. Most of them do not work with data 
 
 ## Never substitute
 
-Use the OpenCivicQuery tools as soon as the request holds enough to start a search. If the tools are not available in this conversation, say: "I need the OpenCivicQuery connection for this. Add it, then ask me again." Then stop.
+Use the OpenCivicQuery tools as soon as the request holds enough to start a search. You can recognize them because they include `list_source_packs`. Another connector with similar tool names, such as a newsroom's own CivicQuery, is a different service with different coverage and rules. Never use it for this skill, and never offer it as a stand-in.
+
+If the OpenCivicQuery tools are missing from this conversation, say: "The OpenCivicQuery connection is not active here. In Claude, open Settings, then Connectors, and connect OpenCivicQuery, or add a custom connector with the URL https://opencivicquery-1040721507408.us-west1.run.app/mcp. Then ask me again." Then stop.
 
 Do not answer from training data, from web results, or from your memory of what a portal contains. A civic number you invented looks exactly like a real one to a reporter, and it can reach print. "I cannot reach the agency's data right now" is always the better answer.
 
