@@ -393,5 +393,5 @@ async def test_list_source_packs_needs_no_network(local_config_path: Path, tmp_p
     assert result.is_error is False
     packs = result.structured_content["packs"]
     assert [pack["domain"] for pack in packs] == ["data.sf.gov", "data.cityofnewyork.us"]
-    assert packs[0]["checked_on"] == "2026-08-26"
+    assert packs[0]["checked_on"] == "2026-10-27"
     assert {"dataset_id": "5cei-gny5", "name": "Eviction Notices"} in packs[0]["datasets"]

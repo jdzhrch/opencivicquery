@@ -161,7 +161,7 @@ The per-client cap raises the cost of abuse; it does not prevent it. Someone wit
 
 1. Pick datasets reporters ask about. Find them with the `search_datasets` tool or on the portal.
 2. Check each dataset against live data before you write anything: what one row represents, whether a unique key holds, which time field to use, and which values are missing or odd.
-3. Write the profile: `row_grain`, `counting_guidance`, and `caveats`. Write only what the data or the agency's documentation supports. When the data contradicts the documentation, say so.
+3. Write the profile: `row_grain`, `counting_guidance`, and `caveats`. Every statement must come from the agency's own dataset or field description, or from a live query you ran, and nothing you inferred goes in. Put the basis in a comment beside each statement: `# official: <where>` or `# checked <date>: <what the query showed>`. A test fails when a statement has no basis. When the data contradicts the documentation, record what the query showed.
 4. Set `checked_on` to the date you checked.
 5. Add the pack to a deployment file and run the tests.
 

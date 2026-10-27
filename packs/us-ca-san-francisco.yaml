@@ -1,105 +1,115 @@
-# San Francisco open data (DataSF). Profiles passed a live schema and unique-key audit
-# in August 2026.
+# San Francisco open data (DataSF).
+# Rule for this pack: every statement comes from DataSF's own dataset or field description
+# ("official"), or from a live query on the date shown ("checked"). Nothing is inferred.
+# The comment beside each statement names its basis.
 pack_id: us-ca-san-francisco
 name: San Francisco
 platform: socrata
 domain: data.sf.gov
-checked_on: '2026-08-26'
+checked_on: '2026-10-27'
 datasets:
 - dataset_id: vw6y-z8j6
   name: 311 Cases
-  row_grain: One SF311 service request
-  unique_key: service_request_id
-  default_time_field: requested_datetime
+  row_grain: One SF311 service request  # official: summary and service_request_id description
+  unique_key: service_request_id  # official: "The unique ID of the service request created"
+  default_time_field: requested_datetime  # official: when the service request was made
   geography_fields:
-    neighborhood: analysis_neighborhood
+    neighborhood: analysis_neighborhood  # official: SF Analysis Neighborhood
     police_district: police_district
     supervisor_district: supervisor_district
-  counting_guidance: Use count(*) for service requests. Counts represent requests, not unique underlying
-    conditions. For tent or encampment questions, set service_name = 'Encampment'. Do not use substring
-    filters on descriptions.
+  # checked 2026-10-27: service_name = 'Encampment' matched 106,988 requests.
+  counting_guidance: Use count(*) for service requests. For encampment questions, filter service_name
+    = 'Encampment'.
   caveats:
-  - Duplicate reports can describe the same underlying condition.
-  - Current rows can change after the request is opened.
-  - Analysis Neighborhood is the default meaning of a neighborhood name such as Mission.
-  - A text search for tent also matches unrelated words such as inattention. Use the Encampment service
-    category.
+  - The dataset holds SF311 cases created since July 1, 2008.  # official: summary
+  - status_description shows the request's current state.  # official: field description
+  - The dataset updates nightly, with new data added around 6am Pacific.  # official: update process
 - dataset_id: 5cei-gny5
   name: Eviction Notices
-  row_grain: One eviction notice filed with the San Francisco Rent Board
-  unique_key: eviction_id
-  default_time_field: file_date
+  row_grain: One eviction notice filed with the San Francisco Rent Board  # official: summary
+  unique_key: eviction_id  # checked 2026-10-27: 49,032 rows, 49,032 distinct values
+  default_time_field: file_date  # official: date the notice was filed with the Rent Board
   geography_fields:
-    neighborhood: neighborhood
-  counting_guidance: Count notices. A notice does not establish that an eviction occurred.
+    neighborhood: neighborhood  # official: analysis neighborhoods
+  counting_guidance: Count notices with count(*).  # official: one row is one notice (summary)
   caveats:
-  - A filed notice does not necessarily mean that the tenant was evicted.
-  - Historical rows can be corrected after publication.
-  - Addresses are published at the block level, so a row locates a block rather than a unit.
+  - A notice of eviction does not necessarily indicate that the tenant was eventually evicted.  # official: summary
+  - Addresses are published at the block level.  # official: address field description
+  - Notices are published since January 1, 1997.  # official: summary
 - dataset_id: f2jc-ivnc
   name: Building Permits Deduplicated on Primary Address
-  row_grain: One building permit at its primary address
-  unique_key: permit_number
-  default_time_field: permit_creation_date
+  row_grain: One building permit at its primary address  # official: primary address flag filter
+  unique_key: permit_number  # checked 2026-10-27: 1,151,389 rows, 1,151,389 distinct values
+  default_time_field: permit_creation_date  # official: date the application was created
   geography_fields:
-    neighborhood: neighborhoods_analysis_boundaries
+    neighborhood: neighborhoods_analysis_boundaries  # official: analysis neighborhood
     supervisor_district: supervisor_district
-  counting_guidance: Count permit records in this deduplicated view for permitting trends.
+  # official: "how to use this dataset" recommends this view for permitting trends.
+  counting_guidance: Count permit records with count(*). DBI recommends this primary-address view for
+    measuring permitting trends across addresses.
   caveats:
-  - Permit creation, filing, approval, issuance, and completion are different events.
-  - The current status must be interpreted with the corresponding status dates.
+  - Creation, filing, issuance, and completion each have their own date field (permit_creation_date,
+    filed_date, issued_date, completed_date).  # official: field descriptions
+  - The status field should be read together with the approved, issued, and completed dates.  # official: status field description
+  - Permit numbers that start with M are miscellaneous permits, such as street use or address creation.  # official: permit_number description
 - dataset_id: wg3w-h783
   name: Police Department Incident Reports, 2018 to Present
-  row_grain: One unique combination of incident report and incident code
-  unique_key: row_id
-  default_time_field: incident_datetime
+  row_grain: One combination of an incident report and an incident code  # official: incident_code description
+  unique_key: row_id  # official: unique identifier for each row; checked 2026-10-27: 1,076,581 distinct of 1,076,581
+  default_time_field: incident_datetime  # official: when the incident occurred
   geography_fields:
     neighborhood: analysis_neighborhood
     police_district: police_district
     supervisor_district: supervisor_district
-  counting_guidance: Use count(distinct incident_id) for incident reports. Use count(*) only for incident-code
-    occurrences.
-  count_distinct_field: incident_id
+  # checked 2026-10-27: 1,076,581 rows for 891,279 distinct incident_id values.
+  counting_guidance: Count incident reports with count(distinct incident_id). count(*) counts combinations
+    of a report and an incident code.
+  count_distinct_field: incident_id  # official: incident IDs uniquely identify reports
   count_distinct_unit: distinct incident reports
   caveats:
-  - One incident report can appear in multiple rows when it has multiple incident codes.
-  - Supplemental reports can add rows for the same incident.
-  - Locations are mapped to nearby intersections for privacy.
-  - The source can remove or revise records after publication.
+  - A single incident report can have one or more incident codes, and each combination is its own row.  # official: incident_code description
+  - report_type_description includes Initial, Initial Supplement, Vehicle Initial, Vehicle Supplement,
+    Coplogic Initial, and Coplogic Supplement.  # official: field description
+  - All incident locations are mapped to nearby intersections. Incidents reported before April 24, 2024
+    use a slightly different set of intersections, which may cause slight irregularities across that
+    date.  # official: dataset note
+  - police_district is entered by officers and is not based on the mapped point.  # official: field description
+  - SFPD does not guarantee the accuracy, completeness, timeliness, or sequencing of the data, and may
+    remove reports to comply with court orders or for administrative purposes.  # official: summary
 - dataset_id: pitq-e56w
   name: Campaign Finance Transactions
-  row_grain: One transaction from the current version of a campaign filing
-  unique_key: element_nid
-  default_time_field: calculated_date
+  row_grain: One transaction from the most recent version of a filing  # official: summary
+  unique_key: element_nid  # official: primary key; checked 2026-10-27: 983,345 distinct of 983,345
+  default_time_field: calculated_date  # official: the 'most-appropriate' date for the transaction
   geography_fields: {}
-  counting_guidance: Filter by form_type before aggregating. Use calculated_amount as the source-recommended
-    amount field.
+  # official: "how to use" (form_type) and the calculated_amount field description.
+  counting_guidance: Filter by form_type before adding anything up; the source says to use it to tell
+    transaction types apart. calculated_amount is the amount the source calls most appropriate.
   caveats:
-  - Different form types represent contributions, expenditures, loans, and other transactions.
-  - Amendments replace prior filing versions.
-  - Nightly updates can be incomplete between midnight and 8am Pacific time.
-  - Some expenditure schedules can describe the same spending and require care to avoid double counting.
+  - The dataset combines transactions from FPPC Forms 460, 461, 496, 497, and 450, across all schedules,
+    and includes unitemized totals.  # official: summary
+  - An amendment completely replaces the original filing and any earlier amendments.  # official: how the dataset is created
+  - The nightly update starts at midnight Pacific, and the source advises viewing or downloading before
+    midnight or after 8am because data may be incomplete during the update.  # official: update process
+  - Transactions from rejected filings are not included.  # official: how to use
+  - element_nid does not persist between an original filing and its amendment.  # official: field description
 - dataset_id: g8m3-pdis
   name: Registered Business Locations - San Francisco
-  row_grain: One registered business location associated with one registered business account
-  unique_key: ttxid
+  row_grain: One business location registered with the Treasurer and Tax Collector  # official: summary
+  unique_key: ttxid  # official: location identifier; checked 2026-10-27: 368,820 distinct of 368,820
   geography_fields:
-    neighborhood: neighborhoods_analysis_boundaries
-  counting_guidance: Use count(*) for registered business locations. When the question asks about businesses
-    or accounts, also run count(distinct certificate_number) and call that result distinct registered
-    business accounts. Neither unit establishes how many businesses actually closed or when operations
-    stopped.
-  count_distinct_field: certificate_number
+    neighborhood: neighborhoods_analysis_boundaries  # official: field description
+  # checked 2026-10-27: 368,820 locations, 259,871 distinct certificate_number values.
+  counting_guidance: count(*) counts business locations. count(distinct certificate_number) counts registered
+    business accounts.
+  count_distinct_field: certificate_number  # official: number assigned to registered business accounts
   count_distinct_unit: distinct registered business accounts
   caveats:
-  - A registered business account can have multiple locations, and each location appears as a separate
-    row.
-  - Location End Date and Business End Date are dates in the registration record. Neither field establishes
-    when business operations stopped.
-  - An administrative closure can mean no filing or communication with the Treasurer and Tax Collector
-    for three years, or a closure notification from another City and County department. Do not assign
-    every administrative closure to the three-year path.
-  - A row without the administrative-closure marker is only an unmarked record. Do not call it an ordinary
-    closure or a closer proxy for a business that wound down.
-  - The July 6, 2026 Proposition M note documents changes to NAICS fields. It does not establish a change
-    to end-date fields or the administrative-closure process.
+  - Each registered business may have multiple locations, and each location is a single row.  # official: summary
+  - Locations marked Administratively Closed have not filed or communicated with the Treasurer and Tax
+    Collector for 3 years, or were marked closed after a notification from another City and County
+    department.  # official: summary and field description
+  - dba_end_date is the end date of the business. location_end_date is the end date at the location,
+    if closed.  # official: field descriptions
+  - Since July 6, 2026, the NAICS code holds only the code the business reported, which the Treasurer
+    and Tax Collector has not verified, and the NAICS description columns are deprecated.  # official: dataset note

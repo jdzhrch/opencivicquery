@@ -378,8 +378,8 @@ async def test_describe_attaches_the_profile_through_an_alias(
     )
 
     assert description.domain == "data.sf.gov"
-    assert description.row_grain == "One unique combination of incident report and incident code"
-    assert any("multiple incident codes" in caveat for caveat in description.caveats)
+    assert description.row_grain == "One combination of an incident report and an incident code"
+    assert any("one or more incident codes" in caveat for caveat in description.caveats)
 
 
 @pytest.mark.asyncio
@@ -394,7 +394,7 @@ async def test_business_profile_returns_claim_specific_stop_signs_without_a_stat
 
     assert "review_status" not in description.model_dump(mode="json")
     assert description.row_grain == (
-        "One registered business location associated with one registered business account"
+        "One business location registered with the Treasurer and Tax Collector"
     )
     assert description.default_time_field is None
     assert any("another City and County department" in caveat for caveat in description.caveats)
@@ -412,7 +412,7 @@ async def test_business_profile_returns_claim_specific_stop_signs_without_a_stat
     assert response.methodology["count_distinct_field"] == "certificate_number"
     assert response.methodology["count_distinct_unit"] == "distinct registered business accounts"
     assert any("count(distinct certificate_number)" in warning for warning in response.warnings)
-    assert any("ordinary closure" in warning for warning in response.warnings)
+    assert any("Administratively Closed" in warning for warning in response.warnings)
     assert response.presentation_rules[0].startswith("INFLATED COUNT")
 
 

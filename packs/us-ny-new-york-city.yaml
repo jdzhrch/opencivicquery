@@ -1,78 +1,85 @@
-# New York City Open Data. Profiles were checked against the live schema and field values.
+# New York City Open Data.
+# Rule for this pack: every statement comes from the agency's own dataset or field description
+# ("official"), or from a live query on the date shown ("checked"). Nothing is inferred.
+# The comment beside each statement names its basis.
 pack_id: us-ny-new-york-city
 name: New York City
 platform: socrata
 domain: data.cityofnewyork.us
-checked_on: '2026-10-26'
+checked_on: '2026-10-27'
 datasets:
 - dataset_id: 43nn-pn8j
   name: DOHMH New York City Restaurant Inspection Results
+  # official: dataset description (violation citations; no-violation inspections and
+  # not-yet-inspected restaurants appear as single rows).
   row_grain: One violation citation from one inspection. An inspection with no violations, and a restaurant
     not yet inspected, each appear as a single row.
-  default_time_field: inspection_date
+  default_time_field: inspection_date  # official: date of inspection
   geography_fields:
-    borough: boro
-    community_board: community_board
-    council_district: council_district
-    nta_code: nta
-    zip: zipcode
-  count_distinct_field: camis
+    borough: boro  # official: borough of the establishment
+    zip: zipcode  # official: zip code of the establishment
+  count_distinct_field: camis  # official: unique identifier, static per restaurant permit
   count_distinct_unit: restaurants (permits)
-  counting_guidance: Rows are violation citations, not inspections or restaurants. Count restaurants with
-    count(distinct camis). Count inspections by grouping on camis, inspection_date, and inspection_type.
-    Exclude inspection_date = '1900-01-01T00:00:00', which marks a restaurant not yet inspected. The score
-    and grade repeat on every violation row of an inspection, so reduce to one row per inspection before
-    averaging or summing scores. For rats use violation_code = '04K'; for mice use '04L'.
+  # official: CAMIS description; 1/1/1900 marks an establishment not yet inspected.
+  # checked 2026-10-27 across all rows: 04K descriptions are evidence of rats; 04L and 04M are evidence of mice.
+  counting_guidance: Rows are violation citations. Count restaurants with count(distinct camis). Exclude
+    inspection_date = '1900-01-01T00:00:00', which marks an establishment not yet inspected. Rats are
+    violation_code '04K'; mice are '04L' and '04M'.
   caveats:
-  - Only restaurants active on the record date are included. Closed restaurants drop out with their whole
-    history, so earlier years are undercounted and year-over-year comparisons are biased.
-  - Each restaurant's history covers up to three years before its most recent inspection.
-  - The number of violations is not a severity measure. The Health Department assigns point values to
-    violations, the inspection score is the total, and a lower score is better. Critical violations are
-    those most likely to contribute to foodborne illness. Point values per violation are not in this dataset.
-  - In this data, initial cycle inspections carry only grade A, with scores 0 to 13. B and C grades appear
-    on re-inspections and reopenings. On graded re-inspections the stored score does not map onto one
-    band (A up to 27, C as low as 21 on 2026-10-26), so never derive a grade from a score. Use the grade
-    field.
-  - N, Z, and P are not letter grades. They mean not yet graded, grade pending, and grade pending after
-    a reopening.
-  - Scores are updated after adjudication.
-  - A boro value of 0 means the borough is missing. The source warns of illogical values from data entry
-    or transfer errors.
+  - When an inspection results in more than one violation, the inspection's fields, including score and
+    grade, repeat on each violation row.  # official: dataset description
+  - Only restaurants in an active status on the record date are included.  # official: dataset description
+  - Each restaurant's records cover inspections up to three years before its most recent inspection.  # official: dataset description
+  - score is the inspection's total score and is updated after adjudication. The Health Department says
+    the lower the score, the better the grade.  # official: score field; nyc.gov restaurant grades page
+  - Critical violations are those most likely to contribute to foodborne illness.  # official: critical_flag description
+  - The dataset has no field with the point value of each violation.  # checked 2026-10-27: schema
+  - Checked on 2026-10-26, initial cycle inspections carry only grade A, with scores 0 to 13, while graded
+    re-inspections show scores that span several grades (grade A up to 27, grade C as low as 21). Use
+    the grade field, and do not derive a grade from a score.  # checked 2026-10-26: grade by score range
+  - N, Z, and P mean not yet graded, grade pending, and grade pending issued on reopening after a closure.  # official: grade description
+  - 303 rows have a boro value of '0', which the field description does not define.  # checked 2026-10-27
+  - The source warns of illogical values from data entry or transfer errors, and of missing data.  # official: dataset description
 - dataset_id: erm2-nwe9
   name: 311 Service Requests from 2020 to Present
-  row_grain: One NYC311 service request routed to a city agency, created in 2020 or later
-  unique_key: unique_key
-  default_time_field: created_date
+  row_grain: One NYC311 service request that can be directed to a specific agency, created in 2020 or
+    later  # official: dataset description
+  unique_key: unique_key  # official: unique identifier of a service request
+  default_time_field: created_date  # official: date the request was created
   geography_fields:
-    borough: borough
-    community_board: community_board
-    council_district: council_district
-    police_precinct: police_precinct
-    zip: incident_zip
-  counting_guidance: Use count(*) for service requests. Counts represent requests, not unique underlying
-    conditions. For rat or mouse questions, set complaint_type = 'Rodent'.
+    borough: borough  # official
+    community_board: community_board  # official
+    council_district: council_district  # official
+    police_precinct: police_precinct  # official
+    zip: incident_zip  # official
+  # checked 2026-10-27: descriptors under complaint_type 'Rodent' were Rat Sighting, Condition Attracting
+  # Rodents, Signs of Rodents, Mouse Sighting, and Rodent Bite - PCS Only.
+  counting_guidance: Use count(*) for service requests. complaint_type 'Rodent' holds the descriptors
+    Rat Sighting, Condition Attracting Rodents, Signs of Rodents, Mouse Sighting, and Rodent Bite - PCS
+    Only; filter on descriptor to separate them.
   caveats:
-  - Requests before 2020 are in a separate dataset, 311 Service Requests from 2010 to 2019 (76ig-c548).
-  - Duplicate reports can describe the same underlying condition.
-  - Complaint categories are defined by agencies and change over time, which can break long trends.
-  - Current rows can change after the request is opened.
+  - Requests from 2010 to 2019 are in a separate dataset, 311 Service Requests from 2010 to 2019 (76ig-c548).  # official: dataset description
+  - Complaint types are defined by the responding agencies, and new ones may be added.  # official: complaint_type description
+  - The dataset is updated daily, and expected values for many fields will change over time.  # official: dataset description
 - dataset_id: 6z8x-wfk4
   name: Evictions
-  row_grain: One eviction executed by a New York City Marshal, 2017 or later
-  default_time_field: executed_date
+  row_grain: One eviction executed by a New York City Marshal, 2017 or later  # official: dataset description
+  default_time_field: executed_date  # official: date the eviction was executed
   geography_fields:
-    borough: borough
-    community_board: community_board
-    council_district: council_district
-    nta_code: nta
-    zip: eviction_zip
-  counting_guidance: Count executed evictions with count(*). Set residential_commercial_ind = 'Residential'
-    for housing evictions. Do not count distinct docket_number values, because each marshal assigns docket
-    numbers independently and the same number appears on unrelated evictions.
+    borough: borough  # official
+    community_board: community_board  # official
+    council_district: council_district  # official
+    nta_code: nta  # official: Neighborhood Tabulation Area
+    zip: eviction_zip  # official
+  # official: docket_number is "assigned by the City Marshal upon case intake".
+  # checked 2026-10-26: docket 108472 appeared on 5 rows with 5 different marshals and 5 dates.
+  counting_guidance: Count executed evictions with count(*). residential_commercial_ind takes the values
+    Residential and Commercial; filter on Residential for housing evictions. Do not count distinct docket_number
+    values, because the same docket number appears on rows with different marshals and dates.
   caveats:
-  - These are executed evictions, the last step of the court process. Filings, court cases, and notices
-    that did not end in an executed eviction are not included.
-  - Most rows are legal possessions, where the tenant is removed and belongings stay with the landlord.
-    Both possessions and full evictions remove the tenant.
-  - Data before January 1, 2017 is not available.
+  - The dataset lists executed evictions in the five boroughs from 2017 on. Data before January 1, 2017
+    is not available.  # official: dataset description
+  - The data is compiled from New York City Marshals.  # official: dataset description
+  - eviction_possession separates an eviction, where the tenant and property are removed, from a legal
+    possession, where the tenant is removed and the property stays with the landlord as bailee. On 2026-10-27,
+    132,849 of 136,185 rows were possessions.  # official: field description; checked 2026-10-27

@@ -142,3 +142,65 @@ def test_chatgpt_package_refuses_a_malformed_app_id(tmp_path: Path, app_id: str)
 
     with pytest.raises(SystemExit):
         build.build(app_id, tmp_path)
+
+
+PACKS = sorted((ROOT / "packs").glob("*.yaml"))
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _statement_blocks(lines: list[str], key: str) -> list[list[str]]:
+    """Raw lines of every `key:` value or `caveats` item, with the comment lines above it."""
+    starts: list[int] = []
+    caveat_indent: int | None = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if key == "caveats":
+            if stripped == "caveats:":
+                caveat_indent = _indent(line)
+            elif caveat_indent is not None and stripped.startswith("- "):
+                if _indent(line) == caveat_indent:
+                    starts.append(index)
+                else:
+                    caveat_indent = None
+            elif (
+                stripped and not stripped.startswith("#") and _indent(line) <= (caveat_indent or 0)
+            ):
+                caveat_indent = None
+        elif stripped.startswith(f"{key}:") and not stripped.endswith(":"):
+            starts.append(index)
+
+    blocks: list[list[str]] = []
+    for index in starts:
+        line = lines[index]
+        block = [line]
+        for follow in lines[index + 1 :]:
+            if (
+                follow.strip()
+                and _indent(follow) > _indent(line)
+                and not follow.strip().startswith("- ")
+            ):
+                block.append(follow)
+            else:
+                break
+        above = index - 1
+        while above >= 0 and lines[above].strip().startswith("#"):
+            block.insert(0, lines[above])
+            above -= 1
+        blocks.append(block)
+    return blocks
+
+
+@pytest.mark.parametrize("pack", PACKS, ids=[pack.stem for pack in PACKS])
+@pytest.mark.parametrize("key", ["row_grain", "counting_guidance", "caveats"])
+def test_every_pack_statement_names_its_basis(pack: Path, key: str) -> None:
+    # A source pack states only what the agency documents or a dated live check shows.
+    lines = pack.read_text().splitlines()
+    blocks = _statement_blocks(lines, key)
+
+    assert blocks, f"{pack.name} has no {key} statements"
+    for block in blocks:
+        text = "\n".join(block)
+        assert "# official" in text or "# checked" in text, f"{pack.name}: no basis for\n{text}"
