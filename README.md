@@ -30,8 +30,13 @@ A public instance runs without login at `https://opencivicquery-1040721507408.us
 
 ### Claude: the plugin
 
-- **Claude Code:** run `/plugin marketplace add jdzhrch/opencivicquery`, then `/plugin install opencivicquery@opencivicquery`.
-- **Claude Team or Enterprise:** an owner opens Organization settings, Plugins & skills, Add, Sync from GitHub, picks `jdzhrch/opencivicquery`, and keeps Sync automatically on. Every member gets the plugin, and each push to this repository updates it.
+The plugin has two parts: the skill, and a connection to the server. Claude installs the skill with the plugin, but the connection has to exist as a connector before the plugin can use it.
+
+1. **Add the connector.** Paste the URL above as a custom connector with no authentication. On Pro and Max, open Customize, Connectors. On Team and Enterprise, an Owner adds it in Organization settings, Connectors, and each member then connects it under Customize, Connectors.
+2. **Install the plugin.**
+   - **Claude desktop app (paid plans):** open Customize, Plugins, Add, Add marketplace, and enter `jdzhrch/opencivicquery`. Then install OpenCivicQuery.
+   - **Claude Code:** run `/plugin marketplace add jdzhrch/opencivicquery`, then `/plugin install opencivicquery@opencivicquery`.
+   - **Organization-wide sync:** Claude's organization sync accepts only private or internal repositories, so it cannot sync this public one directly. An organization that wants central distribution can keep a private copy of this repository and sync that. Sync runs when a pull request that raises the plugin version merges into the default branch.
 
 ### Claude: connection only
 
