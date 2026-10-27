@@ -24,6 +24,20 @@ Datasets without a pack still work. Their responses carry a warning that the row
 
 Current packs: San Francisco (`packs/us-ca-san-francisco.yaml`) and New York City (`packs/us-ny-new-york-city.yaml`). To add a city, see [Contributing a source pack](#contributing-a-source-pack).
 
+## Use the hosted instance
+
+A public instance runs without login at:
+
+```
+https://opencivicquery-1040721507408.us-west1.run.app/mcp
+```
+
+- **Claude (web or desktop):** Settings, Connectors, Add custom connector, then paste the URL.
+- **Claude Code:** `claude mcp add --transport http opencivicquery https://opencivicquery-1040721507408.us-west1.run.app/mcp`
+- **ChatGPT:** add it as a custom connector (MCP server) with no authentication, in developer mode or through your workspace admin.
+
+The hosted instance has daily and per-portal usage caps. For heavy use, run your own copy.
+
 ## Quickstart: run it on your computer
 
 You need [uv](https://docs.astral.sh/uv/).
