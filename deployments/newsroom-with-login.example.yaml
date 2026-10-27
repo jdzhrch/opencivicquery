@@ -1,0 +1,17 @@
+# Example for a newsroom that hosts its own instance with Google sign-in turned on
+# (OPENCIVICQUERY_AUTH_MODE=oauth). Copy, rename, and fill in your own values.
+deployment_id: example-newsroom
+display_name: Example Newsroom
+socrata:
+  portals:
+    - data.sf.gov
+  app_token_env: OPENCIVICQUERY_SOCRATA_APP_TOKEN
+limits:
+  daily_requests: 5000
+  per_portal_per_minute: 120
+packs:
+  - ../packs/us-ca-san-francisco.yaml
+access:
+  allowed_email_domains:
+    - example.org
+  allowed_users_env: OPENCIVICQUERY_ALLOWED_USERS

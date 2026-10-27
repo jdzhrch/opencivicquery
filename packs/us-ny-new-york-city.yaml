@@ -1,0 +1,78 @@
+# New York City Open Data. Profiles were checked against the live schema and field values.
+pack_id: us-ny-new-york-city
+name: New York City
+platform: socrata
+domain: data.cityofnewyork.us
+checked_on: '2026-10-26'
+datasets:
+- dataset_id: 43nn-pn8j
+  name: DOHMH New York City Restaurant Inspection Results
+  row_grain: One violation citation from one inspection. An inspection with no violations, and a restaurant
+    not yet inspected, each appear as a single row.
+  default_time_field: inspection_date
+  geography_fields:
+    borough: boro
+    community_board: community_board
+    council_district: council_district
+    nta_code: nta
+    zip: zipcode
+  count_distinct_field: camis
+  count_distinct_unit: restaurants (permits)
+  counting_guidance: Rows are violation citations, not inspections or restaurants. Count restaurants with
+    count(distinct camis). Count inspections by grouping on camis, inspection_date, and inspection_type.
+    Exclude inspection_date = '1900-01-01T00:00:00', which marks a restaurant not yet inspected. The score
+    and grade repeat on every violation row of an inspection, so reduce to one row per inspection before
+    averaging or summing scores. For rats use violation_code = '04K'; for mice use '04L'.
+  caveats:
+  - Only restaurants active on the record date are included. Closed restaurants drop out with their whole
+    history, so earlier years are undercounted and year-over-year comparisons are biased.
+  - Each restaurant's history covers up to three years before its most recent inspection.
+  - The number of violations is not a severity measure. The Health Department assigns point values to
+    violations, the inspection score is the total, and a lower score is better. Critical violations are
+    those most likely to contribute to foodborne illness. Point values per violation are not in this dataset.
+  - In this data, initial cycle inspections carry only grade A, with scores 0 to 13. B and C grades appear
+    on re-inspections and reopenings. On graded re-inspections the stored score does not map onto one
+    band (A up to 27, C as low as 21 on 2026-10-26), so never derive a grade from a score. Use the grade
+    field.
+  - N, Z, and P are not letter grades. They mean not yet graded, grade pending, and grade pending after
+    a reopening.
+  - Scores are updated after adjudication.
+  - A boro value of 0 means the borough is missing. The source warns of illogical values from data entry
+    or transfer errors.
+- dataset_id: erm2-nwe9
+  name: 311 Service Requests from 2020 to Present
+  row_grain: One NYC311 service request routed to a city agency, created in 2020 or later
+  unique_key: unique_key
+  default_time_field: created_date
+  geography_fields:
+    borough: borough
+    community_board: community_board
+    council_district: council_district
+    police_precinct: police_precinct
+    zip: incident_zip
+  counting_guidance: Use count(*) for service requests. Counts represent requests, not unique underlying
+    conditions. For rat or mouse questions, set complaint_type = 'Rodent'.
+  caveats:
+  - Requests before 2020 are in a separate dataset, 311 Service Requests from 2010 to 2019 (76ig-c548).
+  - Duplicate reports can describe the same underlying condition.
+  - Complaint categories are defined by agencies and change over time, which can break long trends.
+  - Current rows can change after the request is opened.
+- dataset_id: 6z8x-wfk4
+  name: Evictions
+  row_grain: One eviction executed by a New York City Marshal, 2017 or later
+  default_time_field: executed_date
+  geography_fields:
+    borough: borough
+    community_board: community_board
+    council_district: council_district
+    nta_code: nta
+    zip: eviction_zip
+  counting_guidance: Count executed evictions with count(*). Set residential_commercial_ind = 'Residential'
+    for housing evictions. Do not count distinct docket_number values, because each marshal assigns docket
+    numbers independently and the same number appears on unrelated evictions.
+  caveats:
+  - These are executed evictions, the last step of the court process. Filings, court cases, and notices
+    that did not end in an executed eviction are not included.
+  - Most rows are legal possessions, where the tenant is removed and belongings stay with the landlord.
+    Both possessions and full evictions remove the tenant.
+  - Data before January 1, 2017 is not available.

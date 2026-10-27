@@ -1,0 +1,13 @@
+# The shared public instance. No login, so the caps below bound cost and abuse.
+# Counters are per process: with two instances the effective ceiling doubles.
+deployment_id: public
+display_name: OpenCivicQuery
+socrata:
+  portals: any
+  app_token_env: OPENCIVICQUERY_SOCRATA_APP_TOKEN
+limits:
+  daily_requests: 2000
+  per_portal_per_minute: 60
+packs:
+  - ../packs/us-ca-san-francisco.yaml
+  - ../packs/us-ny-new-york-city.yaml

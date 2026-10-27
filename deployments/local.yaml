@@ -1,0 +1,12 @@
+# Run on your own computer. No login, no app token: requests share Socrata's
+# unauthenticated pool, which is enough for one person.
+deployment_id: local
+display_name: OpenCivicQuery (local)
+socrata:
+  portals: any
+limits:
+  daily_requests: 5000
+  per_portal_per_minute: 120
+packs:
+  - ../packs/us-ca-san-francisco.yaml
+  - ../packs/us-ny-new-york-city.yaml
