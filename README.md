@@ -22,6 +22,19 @@ Anyone can query any dataset on any Socrata portal. A **source pack** adds what 
 
 Datasets without a pack still work. Their responses carry a warning that the row unit is unknown.
 
+## Which portals it reaches
+
+Any portal the Socrata catalog lists. Dataset counts below come from the catalog on 2026-10-27 and change often.
+
+| Level | Examples (datasets) |
+|---|---|
+| City | New York (2,406), Chicago (924), Austin (710), San Francisco (668), Los Angeles (361), Dallas (342), Oakland (313), Cambridge MA (281), Baton Rouge (240), New Orleans (209), Kansas City MO (198), Seattle (147), Buffalo (139), Providence (122) |
+| County | Cook IL (523), Montgomery MD (471), King WA (268), Santa Clara CA (131) |
+| State | Maryland (1,546), Washington (1,070), New York (1,035), Texas (830), Connecticut (654), Colorado (639), Oregon (539), Pennsylvania (352) |
+| Federal | CDC (1,084), Department of Transportation (459), HealthData.gov (147) |
+
+Some large publishers use other platforms and are not reachable yet, including Boston, Washington DC, Philadelphia, Denver, Baltimore, San Jose, Los Angeles County, California, and Massachusetts.
+
 Current packs: San Francisco (`packs/us-ca-san-francisco.yaml`) and New York City (`packs/us-ny-new-york-city.yaml`). To add a city, see [Contributing a source pack](#contributing-a-source-pack).
 
 ## Install
