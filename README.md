@@ -123,6 +123,8 @@ uv run opencivicquery-server
 
 The MCP endpoint is `/mcp` and the health check is `/health`. The `Dockerfile` builds an image for Cloud Run or any container host.
 
+This is a query-only service. Independent GET event streams at the MCP endpoint return HTTP 405 with `Allow: POST`, including requests from older clients. Normal POST initialization and tool calls still work; health checks, OAuth discovery, and the local stdio transport are unchanged. The service does not provide idle change-notification subscriptions. A server that scales to zero may take longer to answer the first request after an idle period.
+
 ## Configuration
 
 A deployment file in `deployments/` sets:
@@ -153,9 +155,9 @@ Environment variables:
 
 Login is off by default. A newsroom that wants per-reporter attribution can turn on Google sign-in; see `deployments/newsroom-with-login.example.yaml` and the OAuth variables in `.env.example`. A deployment file with an `access` section refuses to start while login is off, so a forgotten setting never opens a private instance to everyone.
 
-The usage caps count per process. A deployment that runs two instances admits up to twice the configured numbers, so set the platform's instance ceiling as the outer bound on cost.
+The usage caps count per process and reset when that process restarts. Concurrent instances have separate counters, and repeated restarts can reset the allowance again within the same day. The platform's instance ceiling limits concurrent capacity; it does not impose a hard daily usage or spending limit.
 
-The per-client cap raises the cost of abuse; it does not prevent it. Someone with ten addresses, or one IPv6 block, can still use up the server-wide daily allowance. The server-wide cap and the instance ceiling are what bound cost.
+The per-client cap raises the cost of abuse; it does not prevent it. Someone with ten addresses, or one IPv6 block, can still use up the server process's daily allowance. Monitor actual usage and billing rather than treating these caps as a guaranteed budget.
 
 ## Contributing a source pack
 

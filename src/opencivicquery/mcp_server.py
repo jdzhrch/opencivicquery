@@ -15,8 +15,10 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent
 from pydantic import Field, ValidationError
+from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 from opencivicquery import __version__
 from opencivicquery.audit import AuditLogger
@@ -61,6 +63,25 @@ SERVER_INSTRUCTIONS = (
 @dataclass
 class AppState:
     service: OpenCivicQueryService
+
+
+class QueryOnlyMCPServer(MCPServer[AppState]):
+    """Keep HTTP queries without the SDK's independent legacy GET event stream."""
+
+    def streamable_http_app(
+        self, *, streamable_http_path: str = "/mcp", **kwargs: Any
+    ) -> Starlette:
+        app = super().streamable_http_app(streamable_http_path=streamable_http_path, **kwargs)
+
+        async def reject_idle_stream(_: Request) -> Response:
+            return Response(status_code=405, headers={"Allow": "POST"})
+
+        # SDK custom routes come after its MCP route and cannot intercept its GET stream.
+        # Put this route first; POST still reaches the SDK's original authenticated route.
+        app.router.routes.insert(
+            0, Route(streamable_http_path, reject_idle_stream, methods=["GET"])
+        )
+        return app
 
 
 def _build_service(settings: RuntimeSettings) -> OpenCivicQueryService:
@@ -316,7 +337,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             if proxy is not None:
                 await proxy.close()
 
-    server = MCPServer(
+    server = QueryOnlyMCPServer(
         name="opencivicquery",
         title="OpenCivicQuery",
         description="Open, auditable access to government open data for reporters.",
