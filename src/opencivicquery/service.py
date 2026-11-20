@@ -28,7 +28,7 @@ from opencivicquery.models import (
 )
 from opencivicquery.packs import PackRegistry
 from opencivicquery.snapshots import SnapshotStore
-from opencivicquery.sources.base import StructuredSource
+from opencivicquery.sources.base import AddressGeocoder, SourceQueryError, StructuredSource
 from opencivicquery.sources.socrata import SocrataQueryError
 
 OPEN_ACTOR = "anonymous"
@@ -98,6 +98,21 @@ BASE_PRESENTATION_RULES: tuple[str, ...] = (
     "the query.",
     "Include the snapshot URI whenever the user may publish the figure, and offer "
     "pin_snapshot so the evidence outlives the temporary retention window.",
+)
+
+
+GEOCODE_RULE = (
+    "Give the matchedAddress and the geography layer name, such as 120th Congressional "
+    "Districts, beside any geography or coordinate you report from this result, and call "
+    "the coordinates approximate."
+)
+MULTIPLE_MATCH_RULE = (
+    "SEVERAL ADDRESSES MATCHED. Do not report any geography until the reporter says which "
+    "matchedAddress they mean."
+)
+NO_MATCH_RULE = (
+    "NO MATCH. Say that the Census Geocoder found no match. Do not say or imply that the "
+    "address does not exist."
 )
 
 
@@ -242,6 +257,7 @@ class OpenCivicQueryService:
         *,
         bundle: DeploymentBundle,
         source: StructuredSource,
+        geocoder: AddressGeocoder,
         snapshot_store: SnapshotStore,
         audit_logger: AuditLogger,
         limiter: UsageLimiter,
@@ -250,6 +266,7 @@ class OpenCivicQueryService:
         self.bundle = bundle
         self.registry = PackRegistry(bundle)
         self.source = source
+        self.geocoder = geocoder
         self.snapshot_store = snapshot_store
         self.audit = audit_logger
         self.limiter = limiter
@@ -351,6 +368,41 @@ class OpenCivicQueryService:
             )
         except Exception:  # noqa: BLE001 - a nicety must never sink the caller's real result
             return None
+
+    async def _freeze(
+        self,
+        actor: str,
+        result: SourceQueryResult,
+        warnings: list[str],
+        methodology: dict[str, Any],
+        truncation_evidence: TruncationEvidence | None = None,
+    ) -> SnapshotReference:
+        """Store the rows behind a successful answer as an immutable evidence snapshot."""
+        created_at = datetime.now(UTC)
+        snapshot = QuerySnapshot(
+            snapshot_id=f"{created_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:12]}",
+            created_at=created_at,
+            deployment_id=self.registry.deployment_id,
+            actor_id=actor,
+            config_sha256=self.registry.config_sha256,
+            dataset_id=result.dataset_id,
+            dataset_name=result.dataset_name,
+            domain=result.domain,
+            source_url=result.source_url,
+            query=result.query,
+            query_url=result.query_url,
+            rows=result.rows,
+            returned_row_count=result.returned_row_count,
+            completeness=result.completeness,
+            source_updated_at=result.source_updated_at,
+            source_request_id=result.source_request_id,
+            source_etag=result.source_etag,
+            schema_sha256=result.schema_sha256,
+            warnings=warnings,
+            methodology=methodology,
+            truncation_evidence=truncation_evidence,
+        )
+        return await self.snapshot_store.put(snapshot)
 
     def list_packs(self, *, actor_id: str) -> list[PackSummary]:
         self.authorize(actor_id)
@@ -579,31 +631,9 @@ class OpenCivicQueryService:
                     "The source did not report its last update time. The query is frozen, but "
                     "the source version cannot be stated precisely."
                 )
-            created_at = datetime.now(UTC)
-            snapshot = QuerySnapshot(
-                snapshot_id=f"{created_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:12]}",
-                created_at=created_at,
-                deployment_id=self.registry.deployment_id,
-                actor_id=actor,
-                config_sha256=self.registry.config_sha256,
-                dataset_id=result.dataset_id,
-                dataset_name=result.dataset_name,
-                domain=result.domain,
-                source_url=result.source_url,
-                query=result.query,
-                query_url=result.query_url,
-                rows=result.rows,
-                returned_row_count=result.returned_row_count,
-                completeness=result.completeness,
-                source_updated_at=result.source_updated_at,
-                source_request_id=result.source_request_id,
-                source_etag=result.source_etag,
-                schema_sha256=result.schema_sha256,
-                warnings=warnings,
-                methodology=methodology,
-                truncation_evidence=truncation_evidence,
+            snapshot_reference = await self._freeze(
+                actor, result, warnings, methodology, truncation_evidence
             )
-            snapshot_reference = await self.snapshot_store.put(snapshot)
         except TimeoutError:
             # query_dataset owns timeouts and writes their single audit record.
             raise
@@ -676,6 +706,105 @@ class OpenCivicQueryService:
                 truncation_evidence.unit if truncation_evidence is not None else None
             ),
             truncation_evidence=truncation_evidence,
+            snapshot=snapshot_reference,
+        )
+
+    async def geocode_address(
+        self,
+        *,
+        actor_id: str,
+        context: CallContext | None = None,
+        address: str,
+    ) -> QueryResponse:
+        """Place one street address in census geographies, with the same evidence contract
+        as a dataset query: warnings, presentation rules, and a snapshot."""
+        actor = self.authorize(actor_id)
+        call = context or CallContext()
+        ctx = call.audit_fields()
+        start = perf_counter()
+
+        def failed(error_type: str, message: str | None = None) -> None:
+            self._record(
+                "geocode_address",
+                actor,
+                ctx,
+                domain=self.geocoder.host,
+                address=address,
+                status="error",
+                error_type=error_type,
+                error_message=message,
+                duration_ms=round((perf_counter() - start) * 1000),
+            )
+
+        try:
+            self.geocoder.validate(address)
+        except SourceQueryError as exc:
+            # Refused before any request or allowance, as an unsafe query is.
+            failed(exc.code, error_detail(exc))
+            raise
+        self._acquire(
+            "geocode_address", actor, ctx, self.geocoder.host, start, call.capped_client_key
+        )
+        try:
+            async with asyncio.timeout(UPSTREAM_DEADLINE_SECONDS):
+                result = await self.geocoder.geocode(address)
+                warnings = self.geocoder.warnings_for(result)
+                methodology: dict[str, Any] = {"row_grain": self.geocoder.row_grain}
+                snapshot_reference = await self._freeze(actor, result, warnings, methodology)
+        except TimeoutError as exc:
+            failed("SOURCE_TIMEOUT")
+            raise SourceQueryError(
+                "The geocoder did not answer in time.",
+                code="SOURCE_TIMEOUT",
+                public_message="The geocoder did not answer in time. Try again.",
+            ) from exc
+        except Exception as exc:
+            failed(getattr(exc, "code", None) or type(exc).__name__, error_detail(exc))
+            raise
+
+        contract = build_presentation_rules(
+            completeness=result.completeness,
+            inflated_count=None,
+            row_grain=self.geocoder.row_grain,
+            source_updated_at=result.source_updated_at,
+        )
+        escalations: list[str] = []
+        rules = [GEOCODE_RULE]
+        if result.returned_row_count == 0:
+            escalations.append("NO_MATCH")
+            rules.insert(0, NO_MATCH_RULE)
+        elif result.returned_row_count > 1:
+            escalations.append("MULTIPLE_MATCHES")
+            rules.insert(0, MULTIPLE_MATCH_RULE)
+        self._record(
+            "geocode_address",
+            actor,
+            ctx,
+            domain=result.domain,
+            address=address,
+            query=result.query,
+            query_url=result.query_url,
+            status="success",
+            completeness=result.completeness,
+            returned_row_count=result.returned_row_count,
+            presentation_escalations=escalations + contract.escalations,
+            snapshot_id=snapshot_reference.snapshot_id,
+            duration_ms=round((perf_counter() - start) * 1000),
+        )
+        return QueryResponse(
+            dataset_id=result.dataset_id,
+            dataset_name=result.dataset_name,
+            domain=result.domain,
+            source_url=result.source_url,
+            rows=result.rows,
+            returned_row_count=result.returned_row_count,
+            completeness=result.completeness,
+            source_updated_at=result.source_updated_at,
+            query=result.query,
+            query_url=result.query_url,
+            methodology=methodology,
+            warnings=warnings,
+            presentation_rules=rules + contract.rules,
             snapshot=snapshot_reference,
         )
 
@@ -752,4 +881,7 @@ class OpenCivicQueryService:
         return snapshot
 
     async def close(self) -> None:
-        await self.source.close()
+        try:
+            await self.source.close()
+        finally:
+            await self.geocoder.close()

@@ -29,7 +29,9 @@ from opencivicquery.logging_redaction import install as install_log_redaction
 from opencivicquery.models import QueryRequest
 from opencivicquery.service import OPEN_ACTOR, CallContext, OpenCivicQueryService
 from opencivicquery.snapshots import FileSnapshotStore, GcsSnapshotStore, SnapshotError
-from opencivicquery.sources.socrata import SocrataError, SocrataNetwork, SocrataQueryError
+from opencivicquery.sources.base import SourceError, SourceQueryError
+from opencivicquery.sources.census_geocoder import MAX_ADDRESS_LENGTH, CensusGeocoder
+from opencivicquery.sources.socrata import SocrataNetwork
 
 SERVER_INSTRUCTIONS = (
     "OpenCivicQuery answers questions from government open data on every portal the Socrata "
@@ -42,7 +44,9 @@ SERVER_INSTRUCTIONS = (
     "unit is unclear, say exactly what remains unknown and do not expand the result into a "
     "broader claim. Never attach a dataset-wide quality, review, approval, certification, or "
     "publication label. Publication decisions belong to the newsroom's editorial process. "
-    "Every successful query returns a citable snapshot.\n\n"
+    "Every successful query returns a citable snapshot. To place a U.S. street address in "
+    "census geographies such as its county, tract, and block, call geocode_address; it "
+    "follows the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -104,6 +108,7 @@ def _build_service(settings: RuntimeSettings) -> OpenCivicQueryService:
     return OpenCivicQueryService(
         bundle=bundle,
         source=source,
+        geocoder=CensusGeocoder(),
         snapshot_store=snapshot_store,
         audit_logger=AuditLogger(stream=sys.stderr if settings.transport == "stdio" else None),
         limiter=UsageLimiter(bundle.config.limits),
@@ -131,7 +136,7 @@ DATASET_ID_FIELD = Field(
 CLAUSE_FIELD = Field(min_length=1, max_length=8000)
 
 SNAPSHOT_URI_FIELD = Field(
-    description="The snapshot URI that query_dataset returned.",
+    description="The snapshot URI that query_dataset or geocode_address returned.",
     min_length=1,
     max_length=512,
 )
@@ -243,9 +248,9 @@ def _known_error(exc: Exception) -> CallToolResult | None:
         )
     if isinstance(exc, UsageLimitExceeded):
         return _error_result({"code": exc.code, "message": str(exc)})
-    if isinstance(exc, SocrataQueryError):
+    if isinstance(exc, SourceQueryError):
         return _error_result(exc.tool_error())
-    if isinstance(exc, SocrataError):
+    if isinstance(exc, SourceError):
         return _error_result(
             {
                 "code": "SOURCE_ERROR",
@@ -463,10 +468,52 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         return _ok_result(response.model_dump(mode="json"))
 
     @server.tool(
+        name="geocode_address",
+        description=(
+            "Look up one U.S. street address in the U.S. Census Bureau's Census Geocoder. "
+            "Returns each matched address with approximate coordinates and the census "
+            "geographies that contain it: state, county, county subdivision, place, census "
+            "tract, 2020 census block, congressional and state legislative districts. Use it "
+            "to join an address in a records query to census geography. The response has the "
+            "same shape as query_dataset, including warnings, presentation_rules, a public "
+            "query_url, and an evidence snapshot; obey every presentation rule. Use it only "
+            "for places in public records or places the user names. Never use it to find "
+            "where a private person lives, or to turn an address that a portal generalized "
+            "on purpose, such as a block or an intersection, into a point. Failures return "
+            "isError=true with an error object."
+        ),
+    )
+    async def geocode_address(
+        address: Annotated[
+            str,
+            Field(
+                description=(
+                    "One street address on a single line, with city and state or ZIP code, "
+                    f"at most {MAX_ADDRESS_LENGTH} characters."
+                ),
+                min_length=1,
+                max_length=2 * MAX_ADDRESS_LENGTH,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        service = ctx.request_context.lifespan_context.service
+        try:
+            response = await service.geocode_address(
+                actor_id=_actor_id(settings),
+                context=_call_context(settings, reporter_question, ctx),
+                address=address,
+            )
+        except Exception as exc:
+            return _known_error(exc) or _internal_error()
+        return _ok_result(response.model_dump(mode="json"))
+
+    @server.tool(
         name="pin_snapshot",
         description=(
             "Preserve a temporary query snapshot indefinitely for a published story. Use the "
-            "snapshot URI returned by query_dataset."
+            "snapshot URI returned by query_dataset or geocode_address."
         ),
     )
     async def pin_snapshot(

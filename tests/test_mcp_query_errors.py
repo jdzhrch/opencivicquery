@@ -17,6 +17,7 @@ from opencivicquery.config import RuntimeSettings
 from opencivicquery.limits import UsageLimiter
 from opencivicquery.models import QueryResponse
 from opencivicquery.snapshots import FileSnapshotStore, SnapshotError
+from opencivicquery.sources.census_geocoder import CensusGeocoder
 from opencivicquery.sources.socrata import SocrataError, SocrataNetwork
 
 CATALOG_HOST = "api.us.socrata.com"
@@ -942,3 +943,111 @@ async def test_ipv6_slash_64_is_one_client_and_shared_egress_is_not_capped(
     # Many users share a hosted connector's egress, so it meets only the global caps.
     assert all(result["isError"] is False for result in connector_calls)
     assert all(result["isError"] is False for result in proxyless)
+
+
+GEOCODER_ANSWER = {
+    "result": {
+        "input": {
+            "address": {"address": "1 Dr Carlton B Goodlett Pl, San Francisco, CA 94102"},
+            "vintage": {"vintageName": "Current_Current", "vintageDescription": "Current"},
+            "benchmark": {"benchmarkName": "Public_AR_Current", "benchmarkDescription": "AR"},
+        },
+        "addressMatches": [
+            {
+                "matchedAddress": "1 DR CARLTON P GOODLETT PL, SAN FRANCISCO, CA, 94102",
+                "coordinates": {"x": -122.418, "y": 37.778},
+                "tigerLine": {"tigerLineId": "635441232", "side": "L"},
+                "geographies": {
+                    "Census Tracts": [{"GEOID": "06075012405", "NAME": "Census Tract 124.05"}]
+                },
+            }
+        ],
+    }
+}
+
+
+def patch_geocoder(
+    monkeypatch: pytest.MonkeyPatch, response: httpx.Response
+) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(mcp_server, "CensusGeocoder", lambda: CensusGeocoder(client=client))
+    return client, requests
+
+
+@pytest.mark.asyncio
+async def test_geocode_address_returns_evidence_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    geocoder_client, geocoder_requests = patch_geocoder(
+        monkeypatch, httpx.Response(200, json=GEOCODER_ANSWER)
+    )
+    server, http_client, socrata_requests, logger_name = build_test_server(
+        monkeypatch, write_deployment, tmp_path
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    try:
+        async with Client(server, mode="legacy") as client:
+            result = await client.call_tool(
+                "geocode_address",
+                {
+                    "address": "1 Dr Carlton B Goodlett Pl, San Francisco, CA 94102",
+                    "reporter_question": "Which census tract is City Hall in?",
+                },
+            )
+    finally:
+        await http_client.aclose()
+        await geocoder_client.aclose()
+
+    assert result.is_error is False
+    payload = result.structured_content
+    QueryResponse.model_validate(payload)
+    assert payload["rows"][0]["geographies"]["Census Tracts"][0]["GEOID"] == "06075012405"
+    assert payload["domain"] == "geocoding.geo.census.gov"
+    assert payload["snapshot"]["uri"].startswith("file://")
+    assert [request.url.host for request in geocoder_requests] == ["geocoding.geo.census.gov"]
+    assert socrata_requests == []
+    (event,) = audit_events(caplog, logger_name)
+    assert event["action"] == "geocode_address"
+    assert event["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_geocode_address_failure_is_a_tool_error_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    geocoder_client, _ = patch_geocoder(
+        monkeypatch,
+        httpx.Response(400, json={"errors": ["Invalid benchmark in request"], "status": "400"}),
+    )
+    server, http_client, _, _ = build_test_server(monkeypatch, write_deployment, tmp_path)
+    try:
+        async with Client(server, mode="legacy") as client:
+            result = await client.call_tool(
+                "geocode_address",
+                {"address": "1 Main St, Springfield", "reporter_question": "Where is it?"},
+            )
+    finally:
+        await http_client.aclose()
+        await geocoder_client.aclose()
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "QUERY_REJECTED",
+            "message": "Invalid benchmark in request",
+            "argument": None,
+            "http_status": 400,
+        }
+    }
+    assert not list((tmp_path / "snapshots").rglob("*.json"))

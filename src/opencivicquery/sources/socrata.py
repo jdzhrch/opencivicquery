@@ -24,37 +24,15 @@ from opencivicquery.models import (
     SourceQueryResult,
     normalize_domain,
 )
+from opencivicquery.sources.base import SourceError, SourceQueryError
 
 
-class SocrataError(RuntimeError):
+class SocrataError(SourceError):
     """The Socrata source returned an invalid or unsuccessful response."""
 
 
-class SocrataQueryError(SocrataError):
-    """An expected failure with a safe diagnostic for the MCP caller."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "QUERY_REJECTED",
-        argument: str | None = None,
-        http_status: int | None = None,
-        public_message: str | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.argument = argument
-        self.http_status = http_status
-        self.public_message = public_message if public_message is not None else message
-
-    def tool_error(self) -> dict[str, Any]:
-        return {
-            "code": self.code,
-            "message": self.public_message,
-            "argument": self.argument,
-            "http_status": self.http_status,
-        }
+class SocrataQueryError(SourceQueryError, SocrataError):
+    """An expected Socrata failure with a safe diagnostic for the MCP caller."""
 
 
 _DATASET_ID = re.compile(r"^[a-z0-9]{4}-[a-z0-9]{4}$")

@@ -38,6 +38,8 @@ from opencivicquery.service import (
     inflated_count_warning,
 )
 from opencivicquery.snapshots import FileSnapshotStore
+from opencivicquery.sources import census_geocoder
+from opencivicquery.sources.base import SourceError, SourceQueryError
 from opencivicquery.sources.socrata import SocrataQueryError, build_soql
 
 ALIASES = {"data.sfgov.org": "data.sf.gov"}
@@ -179,6 +181,57 @@ class FakeSource:
         return None
 
 
+class FakeGeocoder:
+    """Answers with a fixed number of matches and records every address it was asked."""
+
+    host = census_geocoder.GEOCODER_HOST
+    row_grain = census_geocoder.ROW_GRAIN
+
+    def __init__(self, matches: int = 1, error: Exception | None = None, delay: float = 0.0):
+        self.matches = matches
+        self.error = error
+        self.delay = delay
+        self.addresses: list[str] = []
+        self.closed = False
+
+    def validate(self, address: str) -> str:
+        return census_geocoder.validate_address(address)
+
+    async def geocode(self, address: str) -> SourceQueryResult:
+        self.addresses.append(address)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
+        rows = [
+            {
+                "matchedAddress": f"{index} MAIN ST, SPRINGFIELD",
+                "coordinates": {"x": -72.5, "y": 42.1},
+                "tigerLine": {"tigerLineId": "1", "side": "L"},
+                "geographies": {"Census Tracts": [{"GEOID": "25013800100", "NAME": "Tract"}]},
+            }
+            for index in range(self.matches)
+        ]
+        return SourceQueryResult(
+            dataset_id="Public_AR_Current/Current_Current",
+            dataset_name="Census Geocoder",
+            domain=self.host,
+            source_url="https://geocoding.geo.census.gov/geocoder/",
+            query="address=100+Main+St",
+            query_url="https://geocoding.geo.census.gov/geocoder/x?address=100+Main+St",
+            rows=rows,
+            returned_row_count=len(rows),
+            completeness=Completeness.COMPLETE,
+            schema_sha256="0" * 64,
+        )
+
+    def warnings_for(self, result: SourceQueryResult) -> list[str]:
+        return census_geocoder.CensusGeocoder.warnings_for(self, result)  # type: ignore[arg-type]
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class AuditCapture(logging.Handler):
     def __init__(self) -> None:
         super().__init__()
@@ -204,12 +257,14 @@ def build_service(
     source: FakeSource | None = None,
     auth_mode: str = "open",
     limits: UsageLimits | None = None,
+    geocoder: FakeGeocoder | None = None,
 ) -> tuple[OpenCivicQueryService, FakeSource, AuditCapture]:
     source = source or FakeSource()
     audit, capture = capturing_audit()
     service = OpenCivicQueryService(
         bundle=bundle,
         source=source,
+        geocoder=geocoder or FakeGeocoder(),
         snapshot_store=FileSnapshotStore(tmp_path, bundle.config.deployment_id),
         audit_logger=audit,
         limiter=UsageLimiter(limits or bundle.config.limits),
@@ -1413,3 +1468,196 @@ async def test_audit_records_cap_long_strings(
     assert event["reporter_question"] == "q" * 2000 + "...[truncated 500]"
     assert event["status"] == "success"
     assert event["deployment_id"] == "local"
+
+
+# Geocoding -------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_geocode_freezes_the_match_with_its_caveats(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    geocoder = FakeGeocoder(matches=1)
+    service, source, capture = build_service(local_bundle, tmp_path, geocoder=geocoder)
+
+    response = await service.geocode_address(
+        actor_id="anonymous",
+        context=CallContext(reporter_question="Which tract is city hall in?"),
+        address="1 Main St, Springfield",
+    )
+
+    assert geocoder.addresses == ["1 Main St, Springfield"]
+    assert source.calls == []
+    assert response.domain == census_geocoder.GEOCODER_HOST
+    assert response.returned_row_count == 1
+    assert response.methodology == {"row_grain": census_geocoder.ROW_GRAIN}
+    assert response.warnings == [
+        census_geocoder.MATCHED_ADDRESS_WARNING,
+        census_geocoder.APPROXIMATE_WARNING,
+        census_geocoder.DISTRICT_WARNING,
+        census_geocoder.VINTAGE_WARNING,
+        census_geocoder.FRESHNESS_WARNING,
+    ]
+    assert response.presentation_rules[0] == service_module.GEOCODE_RULE
+    assert BASE_PRESENTATION_RULES[0] in response.presentation_rules
+    assert not any("ROW GRAIN UNKNOWN" in rule for rule in response.presentation_rules)
+    assert any("did not provide an update time" in rule for rule in response.presentation_rules)
+    frozen = frozen_snapshot(response.snapshot.uri)
+    assert frozen["rows"] == response.rows
+    assert frozen["warnings"] == response.warnings
+    assert frozen["query_url"] == response.query_url
+    assert frozen["completeness"] == "complete"
+    (event,) = capture.events
+    assert event["action"] == "geocode_address"
+    assert event["status"] == "success"
+    assert event["address"] == "1 Main St, Springfield"
+    assert event["reporter_question"] == "Which tract is city hall in?"
+    assert event["presentation_escalations"] == []
+    assert event["snapshot_id"] == response.snapshot.snapshot_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("matches", "code", "first_rule", "first_warning"),
+    [
+        (0, "NO_MATCH", service_module.NO_MATCH_RULE, census_geocoder.NO_MATCH_WARNING),
+        (
+            7,
+            "MULTIPLE_MATCHES",
+            service_module.MULTIPLE_MATCH_RULE,
+            census_geocoder.MULTIPLE_MATCH_WARNING,
+        ),
+    ],
+)
+async def test_geocode_escalates_no_match_and_several_matches(
+    local_bundle: DeploymentBundle,
+    tmp_path: Path,
+    matches: int,
+    code: str,
+    first_rule: str,
+    first_warning: str,
+) -> None:
+    service, _, capture = build_service(
+        local_bundle, tmp_path, geocoder=FakeGeocoder(matches=matches)
+    )
+
+    response = await service.geocode_address(actor_id="anonymous", address="100 Main St")
+
+    assert response.presentation_rules[:2] == [first_rule, service_module.GEOCODE_RULE]
+    assert response.warnings[0] == first_warning
+    assert capture.events[0]["presentation_escalations"] == [code]
+    # A result with no rows is still evidence, so it is frozen too.
+    assert frozen_snapshot(response.snapshot.uri)["returned_row_count"] == matches
+
+
+@pytest.mark.asyncio
+async def test_geocode_counts_against_the_caps_in_its_own_bucket(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    limits = UsageLimits(daily_requests=10, per_portal_per_minute=1)
+    geocoder = FakeGeocoder()
+    service, _, capture = build_service(local_bundle, tmp_path, limits=limits, geocoder=geocoder)
+
+    await service.geocode_address(actor_id="anonymous", address="1 Main St")
+    with pytest.raises(UsageLimitExceeded) as caught:
+        await service.geocode_address(actor_id="anonymous", address="2 Main St")
+
+    assert caught.value.code == "PORTAL_RATE_LIMITED"
+    assert census_geocoder.GEOCODER_HOST in str(caught.value)
+    assert geocoder.addresses == ["1 Main St"]
+    assert [event["status"] for event in capture.events] == ["success", "refused"]
+    # The geocoder bucket is separate: a portal query still has its own minute.
+    await service.search_datasets(actor_id="anonymous", search_term="311", domain="data.sf.gov")
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_address_is_refused_before_any_allowance(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    limits = UsageLimits(daily_requests=10, per_portal_per_minute=1)
+    geocoder = FakeGeocoder()
+    service, _, capture = build_service(local_bundle, tmp_path, limits=limits, geocoder=geocoder)
+
+    with pytest.raises(SourceQueryError) as caught:
+        await service.geocode_address(actor_id="anonymous", address="   ")
+    await service.geocode_address(actor_id="anonymous", address="1 Main St")
+
+    assert caught.value.code == "INVALID_QUERY_ARGUMENT"
+    assert geocoder.addresses == ["1 Main St"]
+    assert [(event["status"], event.get("error_type")) for event in capture.events] == [
+        ("error", "INVALID_QUERY_ARGUMENT"),
+        ("success", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_geocode_failure_is_audited_and_leaves_no_snapshot(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    error = SourceQueryError("bad", code="QUERY_REJECTED", http_status=400)
+    service, _, capture = build_service(local_bundle, tmp_path, geocoder=FakeGeocoder(error=error))
+
+    with pytest.raises(SourceQueryError):
+        await service.geocode_address(actor_id="anonymous", address="1 Main St")
+
+    (event,) = capture.events
+    assert event["status"] == "error"
+    assert event["error_type"] == "QUERY_REJECTED"
+    assert event["address"] == "1 Main St"
+    assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_geocode_source_error_keeps_its_type(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    service, _, capture = build_service(
+        local_bundle, tmp_path, geocoder=FakeGeocoder(error=SourceError("broken"))
+    )
+
+    with pytest.raises(SourceError):
+        await service.geocode_address(actor_id="anonymous", address="1 Main St")
+
+    assert capture.events[0]["error_type"] == "SourceError"
+
+
+@pytest.mark.asyncio
+async def test_geocode_timeout_becomes_a_source_timeout(
+    local_bundle: DeploymentBundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "UPSTREAM_DEADLINE_SECONDS", 0.01)
+    service, _, capture = build_service(
+        local_bundle, tmp_path, geocoder=FakeGeocoder(delay=1.0)
+    )
+
+    with pytest.raises(SourceQueryError) as caught:
+        await service.geocode_address(actor_id="anonymous", address="1 Main St")
+
+    assert caught.value.code == "SOURCE_TIMEOUT"
+    (event,) = capture.events
+    assert event["error_type"] == "SOURCE_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_geocode_requires_an_authorized_caller(
+    oauth_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    geocoder = FakeGeocoder()
+    service, _, _ = build_service(oauth_bundle, tmp_path, auth_mode="oauth", geocoder=geocoder)
+
+    with pytest.raises(AuthorizationError):
+        await service.geocode_address(actor_id="stranger@example.net", address="1 Main St")
+
+    assert geocoder.addresses == []
+
+
+@pytest.mark.asyncio
+async def test_closing_the_service_closes_the_geocoder(
+    local_bundle: DeploymentBundle, tmp_path: Path
+) -> None:
+    geocoder = FakeGeocoder()
+    service, _, _ = build_service(local_bundle, tmp_path, geocoder=geocoder)
+
+    await service.close()
+
+    assert geocoder.closed is True

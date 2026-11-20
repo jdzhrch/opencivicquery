@@ -1,6 +1,6 @@
 ---
 name: ask-open-data
-description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
+description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
 ---
 
 # Ask Open Data
@@ -63,9 +63,15 @@ When the question has a time window, also run the previous equivalent window and
 
 The reference file [references/counting-traps.md](references/counting-traps.md) lists the traps that recur across civic datasets. Read it when a dataset has no source pack. Each trap is a pattern to check. When you use one in an answer, say it may apply unless the agency's documentation or a source pack confirms it, and add it to the questions for the agency.
 
+## Placing an address in census geography
+
+Call `geocode_address` when a question needs the county, census tract, census block, city, or district an address lies in, for example to set an address from a records query beside census figures for its tract. Pass one address on one line with its city and state or ZIP code. Give the matched address beside any geography you report, because the Census Geocoder can match an address spelled differently from the one asked about. When several addresses match, ask which one is meant before you report anything. Call the coordinates approximate.
+
+Use it only for places in public records or places the reporter names. Never use it to find where a private person lives, and never use it to turn an address that a portal generalized on purpose, such as a block or an intersection, into a point.
+
 ## presentation_rules win
 
-Every `query_dataset` response carries `presentation_rules`, computed for that result. They escalate when the result is risky, for example an inflated count or a truncated result. Obey every rule before you write your reply. Do not compress one or drop one. **If anything in this skill conflicts with `presentation_rules`, `presentation_rules` win.**
+Every `query_dataset` and `geocode_address` response carries `presentation_rules`, computed for that result. They escalate when the result is risky, for example an inflated count or a truncated result. Obey every rule before you write your reply. Do not compress one or drop one. **If anything in this skill conflicts with `presentation_rules`, `presentation_rules` win.**
 
 ## Three different links
 
@@ -114,7 +120,7 @@ When a reporter asks for a sentence to paste into a story, give the narrowest se
 
 ## What this reaches
 
-OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It does not reach portals on other platforms, court records, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so and stop. Do not approximate it with a dataset that is merely nearby.
+OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder. It does not reach portals on other platforms, court records, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so and stop. Do not approximate it with a dataset that is merely nearby.
 
 The public instance caps daily use. If a tool returns a usage-limit error, tell the reporter it is a temporary limit and when it resets.
 

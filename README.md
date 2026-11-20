@@ -1,6 +1,6 @@
 # OpenCivicQuery
 
-OpenCivicQuery is an MCP server that lets reporters ask questions of government open data in plain language, from Claude, ChatGPT, or any other MCP client. It reaches every portal on the Socrata platform: cities, counties, states, and federal agencies.
+OpenCivicQuery is an MCP server that lets reporters ask questions of government open data in plain language, from Claude, ChatGPT, or any other MCP client. It reaches every portal on the Socrata platform: cities, counties, states, and federal agencies. It also places any U.S. street address in census geography through the Census Bureau's Census Geocoder.
 
 Status: early development. The interface may change.
 
@@ -37,6 +37,20 @@ Some large publishers use other platforms and are not reachable yet, including B
 
 Current packs: San Francisco (`packs/us-ca-san-francisco.yaml`) and New York City (`packs/us-ny-new-york-city.yaml`). To add a city, see [Contributing a source pack](#contributing-a-source-pack).
 
+## Census Geocoder
+
+The `geocode_address` tool sends one U.S. street address to the [Census Geocoder](https://geocoding.geo.census.gov/geocoder/) and returns each matched address with approximate coordinates and the census geographies that contain it: state, county, county subdivision, place, census tract, 2020 census block, and congressional and state legislative districts. It works nationwide and needs no key. Reporters use it to join an address in a records query to census figures for its tract or county.
+
+Its answers carry the same evidence as a dataset query: a public link that reruns the lookup, warnings, presentation rules, and a snapshot. The warnings come from the Census Bureau's own documentation or a dated live check:
+
+- The coordinates are interpolated along the street's address range, so they are approximate.
+- The geocoder can match an address spelled differently from the input, and a short address can match several places. When it does, the assistant asks which one is meant.
+- No match does not mean the address does not exist. The Census Bureau lists non-residential addresses, new construction, changed addresses, missing address ranges, demolished housing, and confidentiality under Title 13 as causes.
+- The geographies are the current ones. Data from an earlier survey or census may use different boundaries.
+- District layers name their own term, such as the 120th Congress, and can describe districts for a term that has not begun. The assistant names the layer beside any district.
+
+The tool uses the current benchmark and vintage only. Addresses are limited to 100 characters, the geocoder's own limit. Lookups count toward the same usage caps as queries.
+
 ## Install
 
 A public instance runs without login at `https://opencivicquery-1040721507408.us-west1.run.app/mcp`. The plugin connects to it and adds the **Ask Open Data** skill, which teaches the assistant how to turn a reporter's question into a countable one, compare periods, and hand back evidence an editor can check.
@@ -66,7 +80,7 @@ In Claude on the web or desktop, open Settings, Connectors, Add custom connector
   The package in `dist/` holds the same skill as the Claude plugin. For a new version, rebuild and publish again; members do not reinstall.
 - **Individual accounts:** add the URL as a custom connector in developer mode. The skill is not included.
 
-The hosted instance caps each direct caller, such as Claude Code or a script, at 200 calls a day per IP address, on top of a server-wide daily cap. Claude and ChatGPT connectors reach the server from the vendors' own addresses on behalf of many users, so their calls count only toward the server-wide cap. Audit logs record a salted hash of the address, never the address itself. For heavy use, run your own copy.
+The hosted instance caps each direct caller, such as Claude Code or a script, at 200 calls a day per IP address, on top of a server-wide daily cap. Claude and ChatGPT connectors reach the server from the vendors' own addresses on behalf of many users, so their calls count only toward the server-wide cap. Audit logs record a salted hash of the caller's IP address, never the IP address itself. They do record the street addresses sent to the geocoder, as they record every query. For heavy use, run your own copy.
 
 ## Quickstart: run it on your computer
 

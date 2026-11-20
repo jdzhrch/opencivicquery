@@ -91,6 +91,7 @@ def test_skill_mentions_only_tools_the_server_offers() -> None:
         "search_datasets",
         "describe_dataset",
         "query_dataset",
+        "geocode_address",
         "pin_snapshot",
         "get_snapshot",
     }

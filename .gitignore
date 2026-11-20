@@ -19,3 +19,6 @@ operations/worklog.md
 
 # Built plugin packages
 dist/
+
+# Chinese working drafts stay local.
+operations/*(中文).md

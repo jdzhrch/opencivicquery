@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "search_datasets",
     "describe_dataset",
     "query_dataset",
+    "geocode_address",
     "pin_snapshot",
     "get_snapshot",
 }
@@ -71,8 +72,14 @@ def test_mcp_tools_expose_source_identity_and_safety_fields(
     assert "domain" not in search_schema["required"]
     # Required, not optional: an optional field is the one a model quietly stops filling,
     # and the reporter's own wording is the part of the record nothing else reconstructs.
-    for name in ("search_datasets", "describe_dataset", "query_dataset"):
+    for name in ("search_datasets", "describe_dataset", "query_dataset", "geocode_address"):
         assert "reporter_question" in tools[name].parameters["required"], name
+    address_schema = tools["geocode_address"].parameters["properties"]["address"]
+    assert address_schema["minLength"] == 1
+    assert address_schema["maxLength"] == 200
+    assert "presentation_rules" in tools["geocode_address"].description
+    assert "private person" in tools["geocode_address"].description
+    assert "geocode_address" in server.instructions
     for name in ("list_source_packs", "pin_snapshot", "get_snapshot"):
         assert "reporter_question" not in tools[name].parameters["properties"], name
     for name in ("pin_snapshot", "get_snapshot"):
