@@ -61,6 +61,16 @@ def test_plugin_connects_to_the_documented_public_instance() -> None:
     assert url in (ROOT / "README.md").read_text()
 
 
+def test_plugin_adds_courtlistener_official_connector_and_the_skill_names_it() -> None:
+    servers = json.loads((PLUGIN / ".mcp.json").read_text())["mcpServers"]
+    text = (SKILL / "SKILL.md").read_text()
+
+    assert set(servers) == {"opencivicquery", "courtlistener"}
+    assert servers["courtlistener"] == {"type": "http", "url": "https://mcp.courtlistener.com/"}
+    assert servers["courtlistener"]["url"] in text
+    assert "## Court records through CourtListener" in text
+
+
 def test_skill_points_to_the_same_connection_as_the_plugin() -> None:
     url = json.loads((PLUGIN / ".mcp.json").read_text())["mcpServers"]["opencivicquery"]["url"]
     text = (SKILL / "SKILL.md").read_text()

@@ -3,6 +3,10 @@
     "opencivicquery": {
       "type": "http",
       "url": "https://opencivicquery-1040721507408.us-west1.run.app/mcp"
+    },
+    "courtlistener": {
+      "type": "http",
+      "url": "https://mcp.courtlistener.com/"
     }
   }
 }

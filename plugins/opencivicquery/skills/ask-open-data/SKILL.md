@@ -1,6 +1,6 @@
 ---
 name: ask-open-data
-description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
+description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in, or asks about court cases, dockets, or opinions that CourtListener holds. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
 ---
 
 # Ask Open Data
@@ -11,7 +11,7 @@ The people you are talking to are reporters. Most of them do not work with data 
 
 ## Never substitute
 
-Use the OpenCivicQuery tools as soon as the request holds enough to start a search. You can recognize them because they include `list_source_packs`. Another connector with similar tool names, such as a newsroom's own CivicQuery, is a different service with different coverage and rules. Never use it for this skill, and never offer it as a stand-in.
+Use the OpenCivicQuery tools as soon as the request holds enough to start a search. You can recognize them because they include `list_source_packs`. Another connector with similar tool names, such as a newsroom's own CivicQuery, is a different service with different coverage and rules. Never use it for this skill, and never offer it as a stand-in. The one other connector this skill uses is CourtListener, and only for court records, as described below.
 
 If the OpenCivicQuery tools are missing from this conversation, say: "The OpenCivicQuery connection is not active here. Add a custom connector with the URL https://opencivicquery-1040721507408.us-west1.run.app/mcp and no authentication, then connect it under Customize, Connectors. On a Claude Team or Enterprise plan, an Owner adds the connector in Organization settings, Connectors, and members then connect it. Then ask me again." Then stop.
 
@@ -62,6 +62,21 @@ When the question has a time window, also run the previous equivalent window and
 - **A count cannot answer a causal question.** Give the levels, name the limit in one sentence, and stop.
 
 The reference file [references/counting-traps.md](references/counting-traps.md) lists the traps that recur across civic datasets. Read it when a dataset has no source pack. Each trap is a pattern to check. When you use one in an answer, say it may apply unless the agency's documentation or a source pack confirms it, and add it to the questions for the agency.
+
+## Court records through CourtListener
+
+Court records come from CourtListener, Free Law Project's archive, through CourtListener's own connector, which this plugin adds. Each person signs in once with a free CourtListener account. Use it for case law and for federal dockets and filings. Never use it for anything else.
+
+If the CourtListener tools are missing, say: "Court records come from CourtListener's connector. Connect CourtListener (https://mcp.courtlistener.com/) from your connector list and sign in with a free CourtListener account, then ask me again." Then stop for that part of the question.
+
+Free Law Project documents these limits. Carry the ones that bear on an answer into your reply:
+
+- **CourtListener's case law search returns only published opinions by default.** When a search finds nothing, say that it covered published opinions only, unless you asked for other statuses.
+- **Federal filings come from PACER through the RECAP Archive.** A document missing from it may still exist in PACER. Never say a filing or a case does not exist because CourtListener lacks it.
+- **Counts of federal cases above 2,000 can be off by about 6%.** Call such a count approximate.
+- **CourtListener's API allows a free account 5 requests a minute, 50 an hour, and 125 a day.** Plan searches so a question needs few calls. If a limit is reached, say so and suggest trying again later.
+
+These answers carry no OpenCivicQuery snapshot. For every case or document you mention, give its CourtListener link, the case name, the court, the docket number, and the date, and say it was retrieved from CourtListener today. Present any summary as your own reading of the records. Never suggest that Free Law Project produced, endorsed, or checked it.
 
 ## Placing an address in census geography
 
@@ -120,7 +135,7 @@ When a reporter asks for a sentence to paste into a story, give the narrowest se
 
 ## What this reaches
 
-OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder. It does not reach portals on other platforms, court records, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so and stop. Do not approximate it with a dataset that is merely nearby.
+OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder, and it searches court records through CourtListener's connector. It does not reach portals on other platforms, state court websites, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so and stop. Do not approximate it with a dataset that is merely nearby.
 
 The public instance caps daily use. If a tool returns a usage-limit error, tell the reporter it is a temporary limit and when it resets.
 

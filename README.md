@@ -57,7 +57,7 @@ A public instance runs without login at `https://opencivicquery-1040721507408.us
 
 ### Claude: the plugin
 
-The plugin has two parts: the skill, and a connection to the server. Claude installs the skill with the plugin, but the connection has to exist as a connector before the plugin can use it.
+The plugin has three parts: the skill, a connection to the server, and a connection to [CourtListener](https://www.courtlistener.com/help/mcp/)'s official connector for court records. Claude installs the skill with the plugin, but the OpenCivicQuery connection has to exist as a connector before the plugin can use it. CourtListener's connector is listed in Claude's connector directory; each person signs in to it with a free CourtListener account the first time it is used. CourtListener's terms forbid sharing one account's tokens across users, so the server does not proxy it.
 
 1. **Add the connector.** Paste the URL above as a custom connector with no authentication. On Pro and Max, open Customize, Connectors. On Team and Enterprise, an Owner adds it in Organization settings, Connectors, and each member then connects it under Customize, Connectors.
 2. **Install the plugin.**
