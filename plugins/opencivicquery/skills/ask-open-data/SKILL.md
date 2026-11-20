@@ -135,9 +135,13 @@ When a reporter asks for a sentence to paste into a story, give the narrowest se
 
 ## What this reaches
 
-OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder, and it searches court records through CourtListener's connector. It does not reach portals on other platforms, state court websites, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so and stop. Do not approximate it with a dataset that is merely nearby.
+OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder, and it searches court records through CourtListener's connector. It does not reach portals on other platforms, state court websites, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so, then name the channels that may hold it, as the next section describes. Do not approximate it with a dataset that is merely nearby.
 
 The public instance caps daily use. If a tool returns a usage-limit error, tell the reporter it is a temporary limit and when it resets.
+
+## When the free tools come up short
+
+A lead often needs records that sit behind a subscription, a per-page fee, or a public website that forbids automated access. When the tools cannot reach a record the reporter needs, or the reporter asks where else it might be, read [references/where-else-to-look.md](references/where-else-to-look.md). Name the channels that fit the record type: what each holds, how to get access, and its published price with the date it was checked. Say plainly that OpenCivicQuery did not search them, and never say that one of them holds a specific record. The reporter can then search those channels or tell a source where to look.
 
 ## Example questions for a stuck user
 

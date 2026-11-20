@@ -183,7 +183,7 @@ The per-client cap raises the cost of abuse; it does not prevent it. Someone wit
 
 ## Plugin development
 
-The skill lives in `plugins/opencivicquery/skills/ask-open-data/`. Both the Claude plugin and the ChatGPT package use it, and the version in `plugins/opencivicquery/.claude-plugin/plugin.json` applies to both. Raise that version with every change to the skill or the connection.
+The skill lives in `plugins/opencivicquery/skills/ask-open-data/`. Its reference `where-else-to-look.md` lists paid and manual-only channels for records the tools cannot reach, such as state court dockets and meeting transcripts, with what each holds, how to get access, and its published price; every entry names a dated source, and a test enforces it. Both the Claude plugin and the ChatGPT package use it, and the version in `plugins/opencivicquery/.claude-plugin/plugin.json` applies to both. Raise that version with every change to the skill or the connection.
 
 ## Development
 

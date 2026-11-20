@@ -71,6 +71,22 @@ def test_plugin_adds_courtlistener_official_connector_and_the_skill_names_it() -
     assert "## Court records through CourtListener" in text
 
 
+def test_every_channel_in_where_else_to_look_names_a_dated_source() -> None:
+    text = (SKILL / "references" / "where-else-to-look.md").read_text()
+    entries = re.split(r"^### ", text, flags=re.MULTILINE)[1:]
+
+    assert entries
+    for entry in entries:
+        name = entry.splitlines()[0]
+        for field in ("Holds", "Access", "Cost"):
+            assert f"- **{field}:**" in entry, name
+        assert re.search(
+            r"^- \*\*Source:\*\* https://\S+ \(checked \d{4}-\d{2}-\d{2}, (page|live)\)$",
+            entry,
+            flags=re.MULTILINE,
+        ), name
+
+
 def test_skill_points_to_the_same_connection_as_the_plugin() -> None:
     url = json.loads((PLUGIN / ".mcp.json").read_text())["mcpServers"]["opencivicquery"]["url"]
     text = (SKILL / "SKILL.md").read_text()

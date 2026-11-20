@@ -1,7 +1,7 @@
 {
   "name": "opencivicquery",
   "displayName": "OpenCivicQuery",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Ask questions of government open data on every Socrata portal, place U.S. street addresses in census geography, and search court records through CourtListener, with evidence a reporter can cite.",
   "author": {
     "name": "Rongcheng Zhang"
