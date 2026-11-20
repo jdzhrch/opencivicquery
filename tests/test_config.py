@@ -287,7 +287,11 @@ def test_local_deployment_loads_without_any_secret(local_config_path: Path) -> N
     assert bundle.config.deployment_id == "local"
     assert bundle.config.socrata.portals == "any"
     assert bundle.socrata_app_token is None
-    assert [pack.domain for pack in bundle.packs] == ["data.sf.gov", "data.cityofnewyork.us"]
+    assert [pack.domain for pack in bundle.packs] == [
+        "data.sf.gov",
+        "data.cityofnewyork.us",
+        "datacatalog.cookcountyil.gov",
+    ]
     assert len(bundle.config_sha256) == 64
 
 

@@ -1,0 +1,116 @@
+# Cook County, Illinois open data (Cook County Open Data portal).
+# Rule for this pack: every statement comes from the agency's own dataset or field description
+# ("official"), or from a live query on the date shown ("checked"). Nothing is inferred.
+# The comment beside each statement names its basis.
+# The Cook County State's Attorney (CCSAO) publishes Intake, Initiation, Dispositions,
+# Sentencing, and Diversion datasets on this portal (checked 2026-11-20: catalog search).
+# Initiation is not profiled: its description speaks of defendant counts by initiation and year, and it
+# does not say what one row is. Diversion is not profiled yet.
+pack_id: us-il-cook-county
+name: Cook County
+platform: socrata
+domain: datacatalog.cookcountyil.gov
+checked_on: '2026-11-20'
+datasets:
+- dataset_id: apwk-dzx8
+  name: Dispositions
+  # official: dataset description ("Each row represents a charge that has been disposed of").
+  # checked 2026-11-20: 1,080,014 rows; the pair case_participant_id and charge_version_id was unique,
+  # and the co-defendants on one charge shared its charge_id and charge_version_id (17 rows for one charge).
+  row_grain: One disposed charge for one defendant in one case. When co-defendants share a charge, each
+    defendant has a row with the same charge_id and charge_version_id.
+  default_time_field: disposition_date  # official: date charge disposed
+  geography_fields:
+    city: incident_city  # official: column name INCIDENT_CITY; checked 2026-11-20: city names such as Chicago
+    court_district: court_name  # official: Circuit Court District in which the charge was disposed
+  count_distinct_field: case_participant_id  # official: identifier for each defendant associated with a case
+  count_distinct_unit: defendants, each counted once per case
+  # official: primary_charge marks the most severe charge against the accused.
+  # checked 2026-11-20: 379,670 distinct case_participant_id values, each in one case; 377,364 rows had
+  # primary_charge true, one per defendant; 1,033,057 distinct charge_id values.
+  counting_guidance: Count disposed charges with count(*), defendants with count(distinct case_participant_id),
+    and cases with count(distinct case_id). Co-defendants share charge_id values, so count(distinct
+    charge_id) falls below the number of defendant charges. primary_charge = true marks the most severe
+    charge and gives one row per defendant, but 2,306 of 379,670 defendants had no such row on 2026-11-20,
+    so a filter on it undercounts defendants. Group by charge_disposition and name each label that a
+    figure combines, such as 'Plea Of Guilty' and 'Finding Guilty'.
+  caveats:
+  - The dataset is no longer actively maintained as of 12/30/2024. Its description sends readers to the
+    data dashboards that the office publishes from 2025 on, at
+    https://www.cookcountystatesattorney.org/data-dashboards.  # official: dataset description
+  - The portal reports a row update on 2026-04-02, yet disposition dates begin 2011-01-03 and end in 2024,
+    apart from 175 rows dated after 2024 (the latest in the year 2924).  # checked 2026-11-20
+  - received_date reaches further back than disposition_date. On 2026-11-20, 2,229 rows had a
+    received_date before 2000, the earliest in 1901.  # checked 2026-11-20
+  - The field description of incident_city reads "Date offense occurred/began", and the column holds city
+    names. The Sentencing and Intake datasets describe the same column as the city where the offense took
+    place.  # official: field descriptions of apwk-dzx8, tg8v-tm6u, and 3k7z-hchi; checked 2026-11-20
+  - The field descriptions do not define abbreviations in charge_disposition (such as FNG, BFW, SOL, FNPC,
+    and WOWI) or the codes in disposition_charged_class (4, 2, 3, X, 1, M, A, B, C, Z, P, O, and U on
+    2026-11-20). The dataset page attaches a CCSAO Data Glossary file.  # checked 2026-11-20: values and attachments
+  - Race and gender are as reported by law enforcement or self-reported, and age at incident is as recorded
+    by law enforcement or self-reported.  # official: field descriptions
+- dataset_id: tg8v-tm6u
+  name: Sentencing
+  # official: dataset description ("Each row represents a charge that has been sentenced") and the
+  # sentence_phase description ("When this version of the sentence was created").
+  # checked 2026-11-20: 305,884 rows; one defendant and charge version had up to 5 rows, which can share a
+  # sentence_phase and differ in sentence_type or current_sentence.
+  row_grain: One sentence record on one charge of one defendant in one case. A charge can have several
+    rows, and current_sentence = true marks one row per defendant per charge.
+  default_time_field: sentence_date  # official: date of when the charge was sentenced
+  geography_fields:
+    city: incident_city  # official: the city where the offense took place
+    court_district: court_name  # official: Circuit Court District in which the sentence was determined
+  count_distinct_field: case_participant_id  # official: identifier for each defendant associated with a case
+  count_distinct_unit: defendants, each counted once per case
+  # official: current_sentence flags the current sentence; primary_charge flags the most severe charge.
+  # checked 2026-11-20: with current_sentence true, the pair case_participant_id and charge_version_id was
+  # unique on all 295,486 rows, and all 264,518 defendants had such a row; 208,842 current rows had
+  # primary_charge true, one per defendant.
+  counting_guidance: Filter current_sentence = true for one row per defendant per sentenced charge. The
+    other 10,398 rows are sentence records that are not current. Count defendants with count(distinct
+    case_participant_id) and cases with count(distinct case_id). A filter on primary_charge = true
+    undercounts defendants, because on 2026-11-20 only 208,842 of 264,518 sentenced defendants had a
+    current row flagged primary. commitment_term is text, and its unit is in commitment_unit (Year(s),
+    Months, Days, Natural Life, Term, Dollars, and others), so filter or convert units before you compare
+    sentence lengths.
+  caveats:
+  - The dataset is no longer actively maintained as of 12/30/2024. Its description sends readers to the
+    data dashboards that the office publishes from 2025 on, at
+    https://www.cookcountystatesattorney.org/data-dashboards.  # official: dataset description
+  - The rows record the judgments that the court imposed on people it found guilty.  # official: dataset description
+  - Sentence dates fall mostly from 2011 on (27,275 rows in 2011). On 2026-11-20, 318 rows were dated before
+    2010 (the earliest in 1930) and 72 rows after 2024 (the latest in the year 2921).  # checked 2026-11-20
+  - length_of_case_in_days is the number of days between the arraignment and the sentencing of a charge.  # official: field description
+  - sentence_type holds the broad type of sentence, and commitment_type a more specific type.  # official: field descriptions
+  - Race and gender are as reported by law enforcement or self-reported, and age at incident is as recorded
+    by law enforcement or self-reported.  # official: field descriptions
+- dataset_id: 3k7z-hchi
+  name: Intake
+  row_grain: One potential defendant in a case that came in for review.  # official: dataset description
+  unique_key: case_participant_id  # checked 2026-11-20: 528,111 rows, 528,111 distinct values
+  default_time_field: received_date  # official: date when Felony Review Unit received the case
+  geography_fields:
+    city: incident_city  # official: the city where the offense took place
+  count_distinct_field: case_id  # official: internal unique identifier for each case
+  count_distinct_unit: distinct cases
+  # official: participant_status "does not necessarily come from Felony Review".
+  # checked 2026-11-20: 453,665 rows had participant_status 'Approved'; 253,330 rows had
+  # felony_review_result 'Approved'; 479,260 distinct case_id values.
+  counting_guidance: Count potential defendants with count(*) and cases with count(distinct case_id).
+    participant_status and felony_review_result are separate fields, and the source says participant_status
+    does not necessarily come from Felony Review. On 2026-11-20, 453,665 rows had participant_status
+    'Approved' and 253,330 had felony_review_result 'Approved'. Name the field behind any approval or
+    rejection figure.
+  caveats:
+  - The dataset is no longer actively maintained as of 12/30/2024. Its description sends readers to the
+    data dashboards that the office publishes from 2025 on, at
+    https://www.cookcountystatesattorney.org/data-dashboards.  # official: dataset description
+  - On 2026-11-20, received_date ran from 2011-01-01 to 2024-11-30.  # checked 2026-11-20
+  - On 2026-11-20, participant_status was empty on 29,579 rows and felony_review_result on 204,935 of the
+    528,111 rows.  # checked 2026-11-20
+  - The updated offense category column is named update_offense_category here and updated_offense_category
+    in the Dispositions and Sentencing datasets.  # checked 2026-11-20: schema
+  - Race and gender are as reported by law enforcement or self-reported, and age at incident is as recorded
+    by law enforcement or self-reported.  # official: field descriptions

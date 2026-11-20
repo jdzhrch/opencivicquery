@@ -83,3 +83,84 @@ datasets:
   - eviction_possession separates an eviction, where the tenant and property are removed, from a legal
     possession, where the tenant is removed and the property stays with the landlord as bailee. On 2026-10-27,
     132,849 of 136,185 rows were possessions.  # official: field description; checked 2026-10-27
+- dataset_id: jz4z-kudi
+  name: OATH Hearings Division Case Status
+  # official: dataset description ("The summonses listed in this dataset are issued and filed at the
+  # OATH Hearings Division by City enforcement agencies").
+  # checked 2026-11-20: 22,253,488 rows and 22,253,488 distinct ticket_number values.
+  row_grain: One summons that a City enforcement agency issued and filed at the OATH Hearings Division, with
+    its charges, hearing status, decision, and amounts.
+  unique_key: ticket_number  # checked 2026-11-20: unique on every row
+  default_time_field: violation_date  # official: column name Violation Date
+  geography_fields:
+    borough: violation_location_borough  # official: column name Violation Location (Borough)
+    zip: violation_location_zip_code  # official: column name Violation Location (Zip Code)
+  # checked 2026-11-20: charge_2_code was filled on 2,806,472 rows and charge_10_code on 744,950 rows;
+  # 42,768 rows had violation_date 1900-01-01.
+  counting_guidance: Count summonses with count(*). One summons can list up to ten charges in charge_1_code
+    through charge_10_code, so a count of one charge code must check all ten columns. For counts by date,
+    exclude violation_date = '1900-01-01T00:00:00' and empty dates. Each summons has one row, so the dataset
+    holds one hearing_status and one hearing_result per summons and keeps no earlier statuses.
+  caveats:
+  - The dataset covers alleged public safety and quality of life violations that City enforcement agencies
+    file at the OATH Hearings Division.  # official: dataset description
+  - Cases at the OATH Trials Division are in a separate dataset, OATH Trials Division Case Status
+    (y3hw-z6bm).  # checked 2026-11-20: catalog search
+  - As of May 4, 2026, the dataset no longer includes the respondent first name or the street name, city,
+    and state of the respondent address. The agency points to the OATH Summons Finder for those details.  # official: dataset description
+  - The dataset is updated daily.  # official: portal metadata, Update Frequency
+  - The portal metadata has no field descriptions for this dataset. The agency attaches a data dictionary
+    file to the dataset page.  # checked 2026-11-20: schema and attachments
+  - The amount fields (total_violation_amount, penalty_imposed, paid_amount, balance_due, and
+    additional_penalties_or_late_fees) have no field descriptions. Ask OATH what each one includes before
+    adding them up.  # checked 2026-11-20: schema
+  - On 2026-11-20, 42,768 rows had violation_date 1900-01-01, 74 more fell before 1980, and 20 fell after
+    that day (the latest in the year 5201). Most rows fall in 1990 or later.  # checked 2026-11-20
+  - On 2026-11-20, 3,226,007 rows had violation_location_borough 'NOT NYC' and 16,089 rows had none.  # checked 2026-11-20
+  - On 2026-11-20, issuing_agency was empty on 3,761,717 rows and held similar labels such as 'POLICE
+    DEPARTMENT' (463,862 rows) and 'POLICE DEPT' (62,771 rows). List every label before you filter on one.  # checked 2026-11-20
+  - On 2026-11-20, hearing_result was empty on 9,185,911 rows and held at least 50 labels, among them
+    'SUSTAINED' and 'Sustained', and 'DEFAULT', 'DEFAULTED', and 'Default/ No Appearance'. The portal
+    metadata does not define them. Group by the field and name each label that a figure combines.  # checked 2026-11-20
+- dataset_id: 59kj-x8nc
+  name: Housing Litigations
+  # official: dataset description and the litigationid description ("Unique number identifying the case").
+  # checked 2026-11-20: 242,293 rows and 242,293 distinct litigationid values.
+  row_grain: One case of the HPD Housing Litigation Division. The division brings Housing Court actions
+    against owners of privately owned buildings and represents HPD when tenants start actions against
+    private owners.
+  unique_key: litigationid  # official: unique number identifying the case; checked 2026-11-20: unique on every row
+  default_time_field: caseopendate  # official: date the case was opened
+  geography_fields:
+    borough: boroid  # official: identifier of the borough
+    zip: zip  # official: zip code for the property
+    community_district: community_district  # official: column name Community District
+    council_district: council_district  # official: column name Council District
+    nta_name: nta  # official: column name NTA; checked 2026-11-20: values are names such as Gramercy
+  count_distinct_field: buildingid  # official: unique identifier of building
+  count_distinct_unit: distinct buildings
+  # checked 2026-11-20: 74,062 distinct buildingid values; casetype 'Tenant Action' had 111,974 rows and
+  # 'Heat and Hot Water' 60,923; 6,779 rows had casestatus 'PENDING'; all 2,750 'CONH' rows, and only
+  # those rows, had a casestatus other than CLOSED or PENDING, in 1,598 distinct labels.
+  counting_guidance: Count cases with count(*) and buildings with count(distinct buildingid). Group or
+    filter by casetype to separate kinds of case, such as 'Tenant Action' and 'Heat and Hot Water'. For
+    counts by year, use caseopendate and exclude empty values. casestatus is CLOSED or PENDING on every row
+    except the casetype 'CONH' rows, which hold labels such as 'GRANTED - 10/20/2006'.
+  caveats:
+  - Actions that tenants start against private owners are included, because HPD is automatically named as
+    a party. Two casetype labels name tenant actions, 'Tenant Action' (111,974 rows on 2026-11-20) and
+    'Tenant Action/Harrassment' (23,281 rows), so a filter on one label leaves out the other. Name each
+    label a figure includes.  # official: dataset description; checked 2026-11-20
+  - The dataset is updated monthly.  # official: portal metadata, Update Frequency
+  - On 2026-11-20, caseopendate fell in 2004 on 995 rows and in 2005 on 8,103 rows. 9 rows had earlier
+    dates, among them the years 204, 1914, and 1930; 2 rows were dated 2030; 298 rows had no date.  # checked 2026-11-20
+  - casejudgement (shown as OpenJudgement) is described as the final judgment, if any, for the case. On
+    2026-11-20 it held only YES (3,671 rows) and NO (238,622 rows).  # official: field description; checked 2026-11-20
+  - findingofharassment has no field description. On 2026-11-20 it held 'No Harassment' (8,200 rows),
+    'After Inquest' (256), and 'After Trial' (81), and 8,535 of its 8,537 filled rows had casetype
+    'Tenant Action/Harrassment'. Ask HPD what each value means before you report it.  # checked 2026-11-20
+  - penalty and findingdate have no field descriptions. On 2026-11-20 they were filled on 337 and 335
+    rows.  # checked 2026-11-20
+  - boroid holds the codes 1 to 5, and its field description does not name the boroughs. community_district
+    holds the numbers 1 to 18 with no borough prefix, and every borough has a district 1, so group it with
+    boroid.  # official: boroid description; checked 2026-11-20
