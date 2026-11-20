@@ -18,6 +18,8 @@ from opencivicquery.limits import UsageLimiter
 from opencivicquery.models import QueryResponse
 from opencivicquery.snapshots import FileSnapshotStore, SnapshotError
 from opencivicquery.sources.census_geocoder import CensusGeocoder
+from opencivicquery.sources.legistar import Legistar
+from opencivicquery.sources.sec_edgar import SecEdgar
 from opencivicquery.sources.socrata import SocrataError, SocrataNetwork
 
 CATALOG_HOST = "api.us.socrata.com"
@@ -1051,3 +1053,154 @@ async def test_geocode_address_failure_is_a_tool_error_over_mcp(
         }
     }
     assert not list((tmp_path / "snapshots").rglob("*.json"))
+
+
+def patch_legistar(
+    monkeypatch: pytest.MonkeyPatch, response: httpx.Response
+) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(mcp_server, "Legistar", lambda: Legistar(client=client))
+    return client, requests
+
+
+LEGISTAR_MEETING = {
+    "EventId": 9617,
+    "EventBodyName": "City Council",
+    "EventDate": "2026-11-19T00:00:00",
+    "EventMinutesStatusName": "DRAFT",
+    "EventInSiteURL": "https://oakland.legistar.com/MeetingDetail.aspx?LEGID=9617",
+}
+
+
+@pytest.mark.asyncio
+async def test_find_meetings_returns_evidence_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    legistar_client, legistar_requests = patch_legistar(
+        monkeypatch, httpx.Response(200, json=[LEGISTAR_MEETING])
+    )
+    server, http_client, socrata_requests, logger_name = build_test_server(
+        monkeypatch, write_deployment, tmp_path
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    try:
+        async with Client(server, mode="legacy") as client:
+            result = await client.call_tool(
+                "find_meetings",
+                {
+                    "client": "oakland",
+                    "start_date": "2026-11-01",
+                    "end_date": "2026-11-20",
+                    "body": "council",
+                    "reporter_question": "When did the council last meet?",
+                },
+            )
+    finally:
+        await http_client.aclose()
+        await legistar_client.aclose()
+
+    assert result.is_error is False
+    payload = result.structured_content
+    QueryResponse.model_validate(payload)
+    assert payload["rows"][0]["EventId"] == 9617
+    assert payload["domain"] == "webapi.legistar.com"
+    assert payload["methodology"]["row_grain"].startswith("One meeting")
+    assert payload["presentation_rules"][0].startswith("Cite each meeting")
+    assert payload["snapshot"]["uri"].startswith("file://")
+    assert [request.url.host for request in legistar_requests] == ["webapi.legistar.com"]
+    assert socrata_requests == []
+    (event,) = audit_events(caplog, logger_name)
+    assert event["action"] == "find_meetings"
+    assert event["status"] == "success"
+    assert event["arguments"]["client"] == "oakland"
+    # Arguments sit under one key, so none can replace the audit record's own fields.
+    assert event["event_id"] != 9617
+    assert event["reporter_question"] == "When did the council last meet?"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_legistar_client_is_refused_and_audited_without_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    legistar_client, legistar_requests = patch_legistar(monkeypatch, httpx.Response(200, json=[]))
+    server, http_client, _, logger_name = build_test_server(
+        monkeypatch,
+        write_deployment,
+        tmp_path,
+        limits={"daily_requests": 1, "per_portal_per_minute": 1},
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    arguments = {
+        "client": "evil.example.com",
+        "start_date": "2026-11-01",
+        "end_date": "2026-11-20",
+        "reporter_question": "When did they meet?",
+    }
+    try:
+        async with Client(server, mode="legacy") as client:
+            refused = await client.call_tool("find_meetings", arguments)
+            # The refusal cost no allowance, so the one daily request is still there.
+            allowed = await client.call_tool("find_meetings", arguments | {"client": "oakland"})
+    finally:
+        await http_client.aclose()
+        await legistar_client.aclose()
+
+    assert refused.is_error is True
+    assert refused.structured_content["error"]["code"] == "INVALID_QUERY_ARGUMENT"
+    assert refused.structured_content["error"]["argument"] == "client"
+    assert allowed.is_error is False
+    assert [request.url.path for request in legistar_requests] == ["/v1/oakland/events"]
+    first, second = audit_events(caplog, logger_name)
+    assert first["status"] == "error"
+    assert first["arguments"]["client"] == "evil.example.com"
+    assert first["domain"] == "webapi.legistar.com"
+    assert second["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_sec_filings_without_a_contact_refuse_without_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests: list[httpx.Request] = []
+    sec_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(200)
+        )
+    )
+    monkeypatch.setattr(
+        mcp_server, "SecEdgar", lambda contact: SecEdgar(contact=contact, client=sec_client)
+    )
+    server, http_client, _, logger_name = build_test_server(monkeypatch, write_deployment, tmp_path)
+    caplog.set_level(logging.INFO, logger=logger_name)
+    try:
+        async with Client(server, mode="legacy") as client:
+            result = await client.call_tool(
+                "find_sec_filings",
+                {"company": "AAPL", "reporter_question": "What did Apple file this year?"},
+            )
+    finally:
+        await http_client.aclose()
+        await sec_client.aclose()
+
+    assert result.is_error is True
+    assert result.structured_content["error"]["code"] == "SOURCE_NOT_CONFIGURED"
+    assert requests == []
+    (event,) = audit_events(caplog, logger_name)
+    assert event["action"] == "find_sec_filings"
+    assert event["status"] == "error"
+    assert event["domain"] == "data.sec.gov"

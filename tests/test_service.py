@@ -363,6 +363,7 @@ def test_list_packs_returns_every_pack_to_an_authorized_caller(
     assert [(pack.pack_id, pack.domain) for pack in packs] == [
         ("us-ca-san-francisco", "data.sf.gov"),
         ("us-ny-new-york-city", "data.cityofnewyork.us"),
+        ("us-il-cook-county", "datacatalog.cookcountyil.gov"),
     ]
     assert {
         "dataset_id": "wg3w-h783",
@@ -1510,7 +1511,8 @@ async def test_geocode_freezes_the_match_with_its_caveats(
     (event,) = capture.events
     assert event["action"] == "geocode_address"
     assert event["status"] == "success"
-    assert event["address"] == "1 Main St, Springfield"
+    assert event["arguments"] == {"address": "1 Main St, Springfield"}
+    assert event["domain"] == "geocoding.geo.census.gov"
     assert event["reporter_question"] == "Which tract is city hall in?"
     assert event["presentation_escalations"] == []
     assert event["snapshot_id"] == response.snapshot.snapshot_id
@@ -1603,7 +1605,7 @@ async def test_geocode_failure_is_audited_and_leaves_no_snapshot(
     (event,) = capture.events
     assert event["status"] == "error"
     assert event["error_type"] == "QUERY_REJECTED"
-    assert event["address"] == "1 Main St"
+    assert event["arguments"] == {"address": "1 Main St"}
     assert not list(tmp_path.rglob("*.json"))
 
 
@@ -1626,9 +1628,7 @@ async def test_geocode_timeout_becomes_a_source_timeout(
     local_bundle: DeploymentBundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(service_module, "UPSTREAM_DEADLINE_SECONDS", 0.01)
-    service, _, capture = build_service(
-        local_bundle, tmp_path, geocoder=FakeGeocoder(delay=1.0)
-    )
+    service, _, capture = build_service(local_bundle, tmp_path, geocoder=FakeGeocoder(delay=1.0))
 
     with pytest.raises(SourceQueryError) as caught:
         await service.geocode_address(actor_id="anonymous", address="1 Main St")

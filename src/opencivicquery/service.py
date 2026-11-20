@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
@@ -28,7 +29,13 @@ from opencivicquery.models import (
 )
 from opencivicquery.packs import PackRegistry
 from opencivicquery.snapshots import SnapshotStore
-from opencivicquery.sources.base import AddressGeocoder, SourceQueryError, StructuredSource
+from opencivicquery.sources.base import (
+    AddressGeocoder,
+    Lookup,
+    PreparedLookup,
+    SourceQueryError,
+    StructuredSource,
+)
 from opencivicquery.sources.socrata import SocrataQueryError
 
 OPEN_ACTOR = "anonymous"
@@ -158,15 +165,13 @@ def inflated_count_warning(select: str, profile: DatasetProfile | None) -> str |
     expression = _without_soql_string_literals(select)
     if distinct_field is None or not _ROW_COUNT.search(expression):
         return None
-    paired = re.compile(
-        rf"count\s*\(\s*distinct\s+{re.escape(distinct_field)}\s*\)", re.IGNORECASE
-    )
+    paired = re.compile(rf"count\s*\(\s*distinct\s+{re.escape(distinct_field)}\s*\)", re.IGNORECASE)
     if paired.search(expression):
         return None
     assert profile is not None
     return (
         f"This query counts rows. The row grain of this dataset is: "
-        f"{profile.row_grain}. Use count(distinct {distinct_field}) to also count "
+        f"{profile.row_grain.rstrip('.')}. Use count(distinct {distinct_field}) to also count "
         f"{profile.count_distinct_unit}. Keep the two units separate and do not rename either "
         "one as a broader real-world entity that the records do not establish."
     )
@@ -718,18 +723,74 @@ class OpenCivicQueryService:
     ) -> QueryResponse:
         """Place one street address in census geographies, with the same evidence contract
         as a dataset query: warnings, presentation rules, and a snapshot."""
+        geocoder = self.geocoder
+
+        async def run(normalized: str) -> Lookup:
+            result = await geocoder.geocode(normalized)
+            rules = [GEOCODE_RULE]
+            escalations: list[str] = []
+            if result.returned_row_count == 0:
+                escalations.append("NO_MATCH")
+                rules.insert(0, NO_MATCH_RULE)
+            elif result.returned_row_count > 1:
+                escalations.append("MULTIPLE_MATCHES")
+                rules.insert(0, MULTIPLE_MATCH_RULE)
+            return Lookup(
+                result=result,
+                row_grain=geocoder.row_grain,
+                warnings=geocoder.warnings_for(result),
+                rules=rules,
+                escalations=escalations,
+            )
+
+        def prepare() -> PreparedLookup:
+            normalized = geocoder.validate(address)
+            return PreparedLookup(
+                host=geocoder.host,
+                arguments={"address": address},
+                run=lambda: run(normalized),
+            )
+
+        return await self.lookup(
+            action="geocode_address",
+            actor_id=actor_id,
+            context=context,
+            arguments={"address": address},
+            prepare=prepare,
+            host=geocoder.host,
+        )
+
+    async def lookup(
+        self,
+        *,
+        action: str,
+        actor_id: str,
+        context: CallContext | None,
+        arguments: dict[str, Any],
+        prepare: Callable[[], PreparedLookup],
+        host: str,
+    ) -> QueryResponse:
+        """Run one record lookup against a fixed host under the full evidence contract.
+
+        The order matters: authorize, validate without touching the network, take one
+        allowance, fetch under the deadline, then freeze the result as a snapshot. An
+        invalid request is refused and audited before it costs an allowance.
+        """
         actor = self.authorize(actor_id)
         call = context or CallContext()
         ctx = call.audit_fields()
         start = perf_counter()
+        # The arguments sit under one key, so no argument name can overwrite an audit
+        # field such as event_id.
+        audited_arguments = arguments
 
         def failed(error_type: str, message: str | None = None) -> None:
             self._record(
-                "geocode_address",
+                action,
                 actor,
                 ctx,
-                domain=self.geocoder.host,
-                address=address,
+                domain=host,
+                arguments=audited_arguments,
                 status="error",
                 error_type=error_type,
                 error_message=message,
@@ -737,57 +798,49 @@ class OpenCivicQueryService:
             )
 
         try:
-            self.geocoder.validate(address)
-        except SourceQueryError as exc:
-            # Refused before any request or allowance, as an unsafe query is.
-            failed(exc.code, error_detail(exc))
+            prepared = prepare()
+        except Exception as exc:
+            failed(getattr(exc, "code", None) or type(exc).__name__, error_detail(exc))
             raise
-        self._acquire(
-            "geocode_address", actor, ctx, self.geocoder.host, start, call.capped_client_key
-        )
+        audited_arguments = prepared.arguments
+        self._acquire(action, actor, ctx, prepared.host, start, call.capped_client_key)
         try:
             async with asyncio.timeout(UPSTREAM_DEADLINE_SECONDS):
-                result = await self.geocoder.geocode(address)
-                warnings = self.geocoder.warnings_for(result)
-                methodology: dict[str, Any] = {"row_grain": self.geocoder.row_grain}
-                snapshot_reference = await self._freeze(actor, result, warnings, methodology)
+                found = await prepared.run()
+                methodology: dict[str, Any] = {"row_grain": found.row_grain}
+                snapshot_reference = await self._freeze(
+                    actor, found.result, found.warnings, methodology
+                )
         except TimeoutError as exc:
             failed("SOURCE_TIMEOUT")
             raise SourceQueryError(
-                "The geocoder did not answer in time.",
+                "The source did not answer in time.",
                 code="SOURCE_TIMEOUT",
-                public_message="The geocoder did not answer in time. Try again.",
+                public_message="The source did not answer in time. Try again.",
             ) from exc
         except Exception as exc:
             failed(getattr(exc, "code", None) or type(exc).__name__, error_detail(exc))
             raise
 
+        result = found.result
         contract = build_presentation_rules(
             completeness=result.completeness,
             inflated_count=None,
-            row_grain=self.geocoder.row_grain,
+            row_grain=found.row_grain,
             source_updated_at=result.source_updated_at,
         )
-        escalations: list[str] = []
-        rules = [GEOCODE_RULE]
-        if result.returned_row_count == 0:
-            escalations.append("NO_MATCH")
-            rules.insert(0, NO_MATCH_RULE)
-        elif result.returned_row_count > 1:
-            escalations.append("MULTIPLE_MATCHES")
-            rules.insert(0, MULTIPLE_MATCH_RULE)
         self._record(
-            "geocode_address",
+            action,
             actor,
             ctx,
             domain=result.domain,
-            address=address,
+            arguments=prepared.arguments,
             query=result.query,
             query_url=result.query_url,
             status="success",
             completeness=result.completeness,
             returned_row_count=result.returned_row_count,
-            presentation_escalations=escalations + contract.escalations,
+            presentation_escalations=found.escalations + contract.escalations,
             snapshot_id=snapshot_reference.snapshot_id,
             duration_ms=round((perf_counter() - start) * 1000),
         )
@@ -803,8 +856,8 @@ class OpenCivicQueryService:
             query=result.query,
             query_url=result.query_url,
             methodology=methodology,
-            warnings=warnings,
-            presentation_rules=rules + contract.rules,
+            warnings=found.warnings,
+            presentation_rules=found.rules + contract.rules,
             snapshot=snapshot_reference,
         )
 

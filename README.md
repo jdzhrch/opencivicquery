@@ -20,6 +20,8 @@ These rules live in the server and travel with every response, so they hold in a
 
 Anyone can query any dataset on any Socrata portal. A **source pack** adds what the raw data does not say: what one row means, how to count it, and the traps. For example, the New York City pack records that restaurant inspection rows are violation citations, so counting rows overstates the number of restaurants.
 
+Packs cover San Francisco, New York City, and Cook County, Illinois. The court-related profiles include New York City's administrative hearing summonses (OATH), Housing Court cases of the city's housing agency (HPD Housing Litigations), and executed evictions, and the Cook County State's Attorney's intake, disposition, and sentencing records, which the office stopped updating at the end of 2024.
+
 Datasets without a pack still work. Their responses carry a warning that the row unit is unknown.
 
 ## Which portals it reaches
@@ -50,6 +52,37 @@ Its answers carry the same evidence as a dataset query: a public link that rerun
 - District layers name their own term, such as the 120th Congress, and can describe districts for a term that has not begun. The assistant names the layer beside any district.
 
 The tool uses the current benchmark and vintage only. Addresses are limited to 100 characters, the geocoder's own limit. Lookups count toward the same usage caps as queries.
+
+## Census data
+
+`get_census_data` pulls American Community Survey 5-year estimates from the Census Bureau's [Census Data API](https://www.census.gov/data/developers/data-sets/acs-5year.html) for any geography the API serves, from a single county to every tract in one. Each answer keeps the API's own values and labels, names the margins of error and annotation codes a reader must not drop, and freezes the result as a citable snapshot. The server needs a free Census Data API key in `OPENCIVICQUERY_CENSUS_API_KEY`; the key is never part of a link, a snapshot, or a log line, so a reader who reruns a query adds their own. This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.
+
+## Meeting records from Legistar
+
+Many cities and counties publish their meetings through Granicus [Legistar](https://webapi.legistar.com/Home/Examples). Four tools read its public Web API, which most jurisdictions leave open without a key:
+
+- `find_meetings` lists the meetings of a council, committee, board, or commission in a date range, with agenda and minutes PDF links, the minutes status, and the meeting page.
+- `get_meeting_items` lists one meeting's agenda items with the action, result, tally, mover, and seconder the clerk recorded.
+- `get_item_votes` lists each member's recorded vote on one item.
+- `search_legislation` finds ordinances, resolutions, and reports by words in the title or by file number, with a link to each one's page.
+
+The caller names a Legistar client, the first part of the jurisdiction's Legistar address, such as `oakland` for oakland.legistar.com. Every request goes to `webapi.legistar.com`; the client name is checked against a strict pattern before it becomes part of the path. Answers carry the same evidence as a dataset query, and the warnings come from the Legistar documentation or a dated live check: the API returns only records the clerk marked public, records can change after retrieval and minutes carry a status such as DRAFT, an empty result or tally does not mean nothing happened, and the legislation search matches text inside longer words. Replies are capped at 1,000 records, Legistar's own limit, and a full page is reported as truncated.
+
+Some jurisdictions, including New York City and Philadelphia, require their own Legistar token, which this server does not hold. The tools return the agenda and minutes links and leave meeting video and captions to the jurisdiction's own site.
+
+## SEC filings
+
+`find_sec_filings` lists one company's filings from the SEC's [EDGAR submissions API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), newest first, with links to each filing index and main document. It accepts a ticker, a CIK, or an exact EDGAR company name, and when a name is not exact it returns candidates with their CIKs instead of guessing. The SEC asks every automated client to declare a contact, so set `OPENCIVICQUERY_SEC_CONTACT`; without it the tool refuses to run. Requests are spaced to stay under the SEC's limit of 10 a second.
+
+The warnings come from the SEC's own pages or a dated live check: EDGAR's recent block holds at least a year or 1,000 filings, and a search that reaches further back is reported as partial; a company's list includes filings others submit about it, such as insiders' Form 4; form types match exactly, so 10-K leaves out 10-K/A; and a related company, such as a predecessor, can file under its own CIK. A row shows that a filing exists and says nothing about what it says.
+
+## Federal awards
+
+`search_federal_awards` searches federal prime awards on [USAspending.gov](https://www.usaspending.gov/): contracts, grants, loans, direct payments, and other assistance, by keyword, recipient, or the state and county where the work is done. Each result keeps USAspending's own field names and links every award to its public page. The source answers only POST requests, so the response records the exact request body in place of a rerunnable link. The warnings state the official caveats that change how the numbers read: an award appears when it had activity in the date range, amounts are obligations for the whole award, Defense contracts are published 90 days late, and subawards are not included.
+
+## Federal court opinions
+
+`search_court_opinions` searches the [United States Courts Opinions](https://www.govinfo.gov/app/collection/uscourts) collection on GovInfo, which holds opinions from selected federal courts, generally from 2004 on. Each search returns GovInfo's count of matching opinion documents, the top-ranked page with public GovInfo links, and caveats about coverage, ranking, and dates. It needs a free api.data.gov key in `OPENCIVICQUERY_GOVINFO_API_KEY`, which the server sends only in a request header and never in a link or a snapshot.
 
 ## Install
 
@@ -166,6 +199,9 @@ Environment variables:
 | `OPENCIVICQUERY_SNAPSHOT_BACKEND` | `local` | `local` or `gcs` |
 | `OPENCIVICQUERY_SNAPSHOT_PATH` | `~/.opencivicquery/snapshots` | Folder for local snapshots |
 | `OPENCIVICQUERY_SNAPSHOT_BUCKET` | | Bucket for Cloud Storage snapshots |
+| `OPENCIVICQUERY_SEC_CONTACT` | | Name and email the SEC asks every automated client to declare. Without it, `find_sec_filings` refuses to run. |
+| `OPENCIVICQUERY_CENSUS_API_KEY` | | Free Census Data API key. Without it, the census data tool refuses to run. |
+| `OPENCIVICQUERY_GOVINFO_API_KEY` | | Free api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run. |
 
 Login is off by default. A newsroom that wants per-reporter attribution can turn on Google sign-in; see `deployments/newsroom-with-login.example.yaml` and the OAuth variables in `.env.example`. A deployment file with an `access` section refuses to start while login is off, so a forgotten setting never opens a private instance to everyone.
 

@@ -38,6 +38,13 @@ class RuntimeSettings(BaseModel):
     oauth_redirect_uris: tuple[str, ...] = ()
     log_level: str = "INFO"
     port: int = Field(default=8080, ge=1, le=65535)
+    sec_contact: str | None = Field(default=None, repr=False)
+    """The contact the SEC asks automated clients to declare. Without it, the SEC filings
+    tool refuses to run."""
+    census_api_key: SecretStr | None = None
+    """Census Data API key. Without it, the census data tool refuses to run."""
+    govinfo_api_key: SecretStr | None = None
+    """api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run."""
 
     @classmethod
     def from_environment(cls) -> RuntimeSettings:
@@ -69,6 +76,9 @@ class RuntimeSettings(BaseModel):
             oauth_redirect_uris=csv("OPENCIVICQUERY_OAUTH_REDIRECT_URIS"),
             log_level=os.getenv("OPENCIVICQUERY_LOG_LEVEL", "INFO"),
             port=int(os.getenv("PORT", "8080")),
+            sec_contact=os.getenv("OPENCIVICQUERY_SEC_CONTACT") or None,
+            census_api_key=os.getenv("OPENCIVICQUERY_CENSUS_API_KEY") or None,
+            govinfo_api_key=os.getenv("OPENCIVICQUERY_GOVINFO_API_KEY") or None,
         )
         if settings.snapshot_backend == "local" and settings.snapshot_path is None:
             settings = settings.model_copy(

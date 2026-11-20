@@ -125,7 +125,7 @@ NYSCEF's terms forbid automated access, and New York's eCourts sites block autom
 
 ## Public meeting transcripts
 
-OpenCivicQuery does not yet read meeting transcripts. These services hold them.
+OpenCivicQuery reads Legistar meeting records, such as agenda items, actions, and votes, but not what was said. These services hold meeting transcripts.
 
 ### Hamlet
 - **Holds:** meeting transcripts tied to speakers and video; it describes coverage of more than 1,700 cities and counties.

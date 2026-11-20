@@ -1,6 +1,6 @@
 ---
 name: ask-open-data
-description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in, or asks about court cases, dockets, or opinions that CourtListener holds. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
+description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in, or what a city or county council or committee did at a meeting, how members voted, or where a local ordinance stands, or asks about court cases, dockets, or opinions that CourtListener holds. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
 ---
 
 # Ask Open Data
@@ -78,15 +78,35 @@ Free Law Project documents these limits. Carry the ones that bear on an answer i
 
 These answers carry no OpenCivicQuery snapshot. For every case or document you mention, give its CourtListener link, the case name, the court, the docket number, and the date, and say it was retrieved from CourtListener today. Present any summary as your own reading of the records. Never suggest that Free Law Project produced, endorsed, or checked it.
 
+## Federal court opinions from GovInfo
+
+`search_court_opinions` searches the opinions that selected federal courts publish to GovInfo, mostly from 2004 on. It needs no sign-in, so use it when CourtListener is not connected, or to confirm an opinion against the government's own copy. It holds opinions only, no dockets or filings, and many courts are missing from it, so a search that finds nothing says nothing about whether a case exists. Its count is of opinion documents, and one case can have several. Cite each opinion's GovInfo link.
+
 ## Placing an address in census geography
 
 Call `geocode_address` when a question needs the county, census tract, census block, city, or district an address lies in, for example to set an address from a records query beside census figures for its tract. Pass one address on one line with its city and state or ZIP code. Give the matched address beside any geography you report, because the Census Geocoder can match an address spelled differently from the one asked about. When several addresses match, ask which one is meant before you report anything. Call the coordinates approximate.
 
-Use it only for places in public records or places the reporter names. Never use it to find where a private person lives, and never use it to turn an address that a portal generalized on purpose, such as a block or an intersection, into a point.
+To set records beside population, income, rent, or other survey figures, call `get_census_data` for the same geographies, such as every tract in the county. Ask for each estimate's margin of error (the variable ending in M) and NAME, give the margin beside every estimate, and say the figures describe a five-year period. A negative code such as -666666666 is a note, never a value. Every answer that uses these figures must say: "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."
+
+Use `geocode_address` only for places in public records or places the reporter names. Never use it to find where a private person lives, and never use it to turn an address that a portal generalized on purpose, such as a block or an intersection, into a point.
+
+## Meetings, votes, and legislation
+
+Many cities and counties publish meetings through Legistar. For what a council, committee, board, or commission did, call `find_meetings` with the jurisdiction's Legistar client name, the first part of its Legistar address, such as oakland for oakland.legistar.com. Then call `get_meeting_items` for a meeting's agenda items and recorded actions, and `get_item_votes` for how each member voted on one item. To follow a measure across meetings, call `search_legislation` with words from its title or its file number. If you do not know the client name, ask the reporter for the jurisdiction's Legistar web address rather than trying several names; an unknown name returns a clear error.
+
+Give the minutes status, such as DRAFT or FINAL, beside any action or vote you report, and cite the meeting page or the matter page. An empty action or tally does not mean nothing happened: check the votes and the minutes file before saying an item had no vote. Some places, including New York City, need a token this server does not hold; when a tool says so, point the reporter to the jurisdiction's own Legistar site. These tools read records, not transcripts. For what was said at a meeting, use the meeting channels in [references/where-else-to-look.md](references/where-else-to-look.md).
+
+## Company filings with the SEC
+
+For a company's filings with the SEC, such as annual reports, 8-K event reports, or insiders' trades, call `find_sec_filings` with a ticker, a CIK, or the exact company name. If the name is not exact, the tool returns candidates; ask the reporter which one is meant. A row shows only that a filing exists: open the filing before you say what it contains, check for an amendment such as 10-K/A, and check who filed it before you attribute it to the company.
+
+## Federal contracts and grants
+
+For federal money that went to a place, a company, or a program, call `search_federal_awards` with one award type (contracts, grants, loans, direct payments, or other), a date range, and keywords, a recipient, or a state with an optional county code. An award appears when it had activity in the date range, so check its start date before you call it new. Amounts are obligations for the whole award, and the place filter is where the work is done, not where the recipient sits. Each row links to its USAspending page; cite that page.
 
 ## presentation_rules win
 
-Every `query_dataset` and `geocode_address` response carries `presentation_rules`, computed for that result. They escalate when the result is risky, for example an inflated count or a truncated result. Obey every rule before you write your reply. Do not compress one or drop one. **If anything in this skill conflicts with `presentation_rules`, `presentation_rules` win.**
+Every response from `query_dataset` and the lookup tools, such as `geocode_address` and `find_meetings`, carries `presentation_rules`, computed for that result. They escalate when the result is risky, for example an inflated count or a truncated result. Obey every rule before you write your reply. Do not compress one or drop one. **If anything in this skill conflicts with `presentation_rules`, `presentation_rules` win.**
 
 ## Three different links
 
@@ -135,7 +155,7 @@ When a reporter asks for a sentence to paste into a story, give the narrowest se
 
 ## What this reaches
 
-OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder, and it searches court records through CourtListener's connector. It does not reach portals on other platforms, state court websites, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so, then name the channels that may hold it, as the next section describes. Do not approximate it with a dataset that is merely nearby.
+OpenCivicQuery reaches every government portal on the Socrata platform, which covers many cities, counties, and states and several federal agencies. It also looks up U.S. street addresses in the Census Bureau's Census Geocoder, pulls American Community Survey estimates from the Census Data API, reads meeting records and legislation from Legistar, lists companies' SEC filings, searches federal awards on USAspending.gov, searches federal court opinions on GovInfo, and searches court records through CourtListener's connector. It does not reach portals on other platforms, state court websites, private databases, or anything inside a newsroom. If a question needs a source outside that boundary, say so, then name the channels that may hold it, as the next section describes. Do not approximate it with a dataset that is merely nearby.
 
 The public instance caps daily use. If a tool returns a usage-limit error, tell the reporter it is a temporary limit and when it resets.
 
@@ -149,3 +169,4 @@ A lead often needs records that sit behind a subscription, a per-page fee, or a 
 - A council member says rat complaints are down this year. Is that right?
 - How many restaurants in my city were cited for evidence of rats last year?
 - Which datasets does my county publish about building permits?
+- How did the Oakland City Council vote on the Justice for Renters Act resolution?

@@ -18,6 +18,9 @@ _PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"((?:access|id|refresh)_token=)[^&\s\"'&]+", re.IGNORECASE),
     re.compile(r"((?:client_secret|code|assertion)=)[^&\s\"'&]+", re.IGNORECASE),
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/\-]+=*", re.IGNORECASE),
+    # Data API keys that travel as query parameters, such as the Census Data API's key=
+    # and api.data.gov's api_key=. A backslash ends the value so JSON escapes survive.
+    re.compile(r"(\b(?:api_)?key=)[^&\s\"'\\]+", re.IGNORECASE),
 )
 
 

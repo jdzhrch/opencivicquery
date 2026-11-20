@@ -4,17 +4,17 @@ import hashlib
 import json
 import logging
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent
-from pydantic import Field, ValidationError
+from pydantic import Field, SecretStr, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -29,9 +29,30 @@ from opencivicquery.logging_redaction import install as install_log_redaction
 from opencivicquery.models import QueryRequest
 from opencivicquery.service import OPEN_ACTOR, CallContext, OpenCivicQueryService
 from opencivicquery.snapshots import FileSnapshotStore, GcsSnapshotStore, SnapshotError
-from opencivicquery.sources.base import SourceError, SourceQueryError
+from opencivicquery.sources.base import PreparedLookup, SourceError, SourceQueryError
+from opencivicquery.sources.census_data import CENSUS_DATA_HOST, MAX_VARIABLES, CensusData
 from opencivicquery.sources.census_geocoder import MAX_ADDRESS_LENGTH, CensusGeocoder
+from opencivicquery.sources.govinfo import DEFAULT_LIMIT as OPINIONS_DEFAULT_LIMIT
+from opencivicquery.sources.govinfo import GOVINFO_HOST, GovInfo
+from opencivicquery.sources.govinfo import MAX_LIMIT as OPINIONS_MAX_LIMIT
+from opencivicquery.sources.govinfo import MAX_TEXT_LENGTH as OPINIONS_MAX_TEXT
+from opencivicquery.sources.legistar import LEGISTAR_HOST, Legistar
+from opencivicquery.sources.legistar import MAX_LIMIT as LEGISTAR_MAX_LIMIT
+from opencivicquery.sources.legistar import MAX_TEXT_LENGTH as LEGISTAR_MAX_TEXT
+from opencivicquery.sources.sec_edgar import DEFAULT_LIMIT as SEC_DEFAULT_LIMIT
+from opencivicquery.sources.sec_edgar import MAX_COMPANY_LENGTH, MAX_FORM_TYPES, SecEdgar
+from opencivicquery.sources.sec_edgar import MAX_LIMIT as SEC_MAX_LIMIT
+from opencivicquery.sources.sec_edgar import SUBMISSIONS_HOST as SEC_HOST
 from opencivicquery.sources.socrata import SocrataNetwork
+from opencivicquery.sources.usaspending import DEFAULT_LIMIT as AWARDS_DEFAULT_LIMIT
+from opencivicquery.sources.usaspending import (
+    MAX_KEYWORD_LENGTH,
+    MAX_KEYWORDS,
+    MAX_RECIPIENT_LENGTH,
+    USASPENDING_HOST,
+    USAspending,
+)
+from opencivicquery.sources.usaspending import MAX_LIMIT as AWARDS_MAX_LIMIT
 
 SERVER_INSTRUCTIONS = (
     "OpenCivicQuery answers questions from government open data on every portal the Socrata "
@@ -45,8 +66,14 @@ SERVER_INSTRUCTIONS = (
     "broader claim. Never attach a dataset-wide quality, review, approval, certification, or "
     "publication label. Publication decisions belong to the newsroom's editorial process. "
     "Every successful query returns a citable snapshot. To place a U.S. street address in "
-    "census geographies such as its county, tract, and block, call geocode_address; it "
-    "follows the same evidence rules.\n\n"
+    "census geographies such as its county, tract, and block, call geocode_address. For "
+    "American Community Survey estimates for those geographies, call get_census_data. For "
+    "city and county meetings, agenda items, member votes, and legislation in places that "
+    "publish through Legistar, call find_meetings, get_meeting_items, get_item_votes, and "
+    "search_legislation. For a company's SEC filings, call find_sec_filings. For federal "
+    "contracts, grants, and other awards, call search_federal_awards. For the text of federal "
+    "court opinions, call search_court_opinions. These tools follow "
+    "the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -67,6 +94,13 @@ SERVER_INSTRUCTIONS = (
 @dataclass
 class AppState:
     service: OpenCivicQueryService
+    legistar: Legistar | None = None
+    sec: SecEdgar | None = None
+    usaspending: USAspending | None = None
+    govinfo: GovInfo | None = None
+    census: CensusData | None = None
+    """Record sources that answer through OpenCivicQueryService.lookup. The lifespan
+    builds and closes them; None only in tests that never call their tools."""
 
 
 class QueryOnlyMCPServer(MCPServer[AppState]):
@@ -136,7 +170,7 @@ DATASET_ID_FIELD = Field(
 CLAUSE_FIELD = Field(min_length=1, max_length=8000)
 
 SNAPSHOT_URI_FIELD = Field(
-    description="The snapshot URI that query_dataset or geocode_address returned.",
+    description="The snapshot URI that a query or lookup tool returned.",
     min_length=1,
     max_length=512,
 )
@@ -149,6 +183,23 @@ DOMAIN_FIELD = Field(
     min_length=1,
     max_length=253,
 )
+
+
+LEGISTAR_CLIENT_FIELD = Field(
+    description=(
+        "The jurisdiction's Legistar client name: the first part of its Legistar web "
+        "address, such as oakland for oakland.legistar.com or seattle for "
+        "seattle.legistar.com."
+    ),
+    min_length=1,
+    max_length=40,
+)
+
+DATE_FIELD = Field(description="A date as YYYY-MM-DD.", min_length=10, max_length=10)
+
+
+def _secret(value: SecretStr | None) -> str | None:
+    return value.get_secret_value() if value is not None else None
 
 
 def _connection_id(settings: RuntimeSettings) -> str | None:
@@ -332,15 +383,25 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
 
     @asynccontextmanager
     async def lifespan(_: MCPServer[AppState]) -> AsyncIterator[AppState]:
-        service = _build_service(settings)
-        try:
-            yield AppState(service=service)
-        finally:
-            await service.close()
+        async with AsyncExitStack() as stack:
+            service = _build_service(settings)
+            # Callbacks run in reverse order, and each one runs even if another fails.
+            stack.push_async_callback(service.close)
+            state = AppState(service=service, legistar=Legistar())
+            stack.push_async_callback(state.legistar.close)
+            state.sec = SecEdgar(contact=settings.sec_contact)
+            stack.push_async_callback(state.sec.close)
+            state.usaspending = USAspending()
+            stack.push_async_callback(state.usaspending.close)
+            state.govinfo = GovInfo(api_key=_secret(settings.govinfo_api_key))
+            stack.push_async_callback(state.govinfo.close)
+            state.census = CensusData(api_key=_secret(settings.census_api_key))
+            stack.push_async_callback(state.census.close)
             if verifier is not None:
-                await verifier.close()
+                stack.push_async_callback(verifier.close)
             if proxy is not None:
-                await proxy.close()
+                stack.push_async_callback(proxy.close)
+            yield state
 
     server = QueryOnlyMCPServer(
         name="opencivicquery",
@@ -509,11 +570,464 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             return _known_error(exc) or _internal_error()
         return _ok_result(response.model_dump(mode="json"))
 
+    async def run_lookup(
+        ctx: Context[AppState],
+        *,
+        action: str,
+        reporter_question: str,
+        arguments: dict[str, Any],
+        prepare: Callable[[AppState], PreparedLookup],
+        host: str,
+    ) -> CallToolResult:
+        state = ctx.request_context.lifespan_context
+        try:
+            response = await state.service.lookup(
+                action=action,
+                actor_id=_actor_id(settings),
+                context=_call_context(settings, reporter_question, ctx),
+                arguments=arguments,
+                prepare=lambda: prepare(state),
+                host=host,
+            )
+        except Exception as exc:
+            return _known_error(exc) or _internal_error()
+        return _ok_result(response.model_dump(mode="json"))
+
+    def legistar(state: AppState) -> Legistar:
+        if state.legistar is None:
+            raise RuntimeError("The Legistar source was not built")
+        return state.legistar
+
+    @server.tool(
+        name="find_meetings",
+        description=(
+            "Find public meetings of a city or county that publishes its agendas in Granicus "
+            "Legistar: councils, committees, boards, and commissions. Returns each meeting "
+            "with its agenda and minutes PDF links, the minutes status, and the meeting page "
+            "to cite. The response has the same shape as query_dataset, including warnings, "
+            "presentation_rules, a public query_url, and an evidence snapshot; obey every "
+            "presentation rule. Some jurisdictions, such as New York City, require a token "
+            "this server does not hold. Failures return isError=true with an error object."
+        ),
+    )
+    async def find_meetings(
+        client: Annotated[str, LEGISTAR_CLIENT_FIELD],
+        start_date: Annotated[str, DATE_FIELD],
+        end_date: Annotated[str, DATE_FIELD],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        body: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional words from the body's name, such as City Council or Planning "
+                    "Commission. Matches anywhere in the name, ignoring case."
+                ),
+                min_length=1,
+                max_length=LEGISTAR_MAX_TEXT,
+            ),
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=LEGISTAR_MAX_LIMIT)] = 50,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "client": client,
+            "start_date": start_date,
+            "end_date": end_date,
+            "body": body,
+            "limit": limit,
+        }
+        return await run_lookup(
+            ctx,
+            action="find_meetings",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=LEGISTAR_HOST,
+            prepare=lambda state: legistar(state).find_meetings(**arguments),
+        )
+
+    @server.tool(
+        name="get_meeting_items",
+        description=(
+            "List the agenda items of one Legistar meeting, with the action, result, tally, "
+            "mover, and seconder the clerk recorded for each. Use an EventId that "
+            "find_meetings returned for the same client. Same response shape and rules as "
+            "query_dataset."
+        ),
+    )
+    async def get_meeting_items(
+        client: Annotated[str, LEGISTAR_CLIENT_FIELD],
+        event_id: Annotated[int, Field(description="EventId from find_meetings.", ge=1)],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"client": client, "event_id": event_id}
+        return await run_lookup(
+            ctx,
+            action="get_meeting_items",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=LEGISTAR_HOST,
+            prepare=lambda state: legistar(state).get_meeting_items(**arguments),
+        )
+
+    @server.tool(
+        name="get_item_votes",
+        description=(
+            "List each member's vote on one agenda item of a Legistar meeting, as the clerk "
+            "recorded it. Use the EventId from find_meetings and the EventItemId from "
+            "get_meeting_items. Same response shape and rules as query_dataset."
+        ),
+    )
+    async def get_item_votes(
+        client: Annotated[str, LEGISTAR_CLIENT_FIELD],
+        event_id: Annotated[int, Field(description="EventId from find_meetings.", ge=1)],
+        event_item_id: Annotated[
+            int, Field(description="EventItemId from get_meeting_items.", ge=1)
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"client": client, "event_id": event_id, "event_item_id": event_item_id}
+        return await run_lookup(
+            ctx,
+            action="get_item_votes",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=LEGISTAR_HOST,
+            prepare=lambda state: legistar(state).get_item_votes(**arguments),
+        )
+
+    @server.tool(
+        name="search_legislation",
+        description=(
+            "Search a jurisdiction's Legistar legislation, such as ordinances, resolutions, "
+            "and reports, by words in the title or name or by exact file number, optionally "
+            "within an introduction date range. Returns each matter's type, status, body, "
+            "dates, and page link, newest first. Same response shape and rules as "
+            "query_dataset."
+        ),
+    )
+    async def search_legislation(
+        client: Annotated[str, LEGISTAR_CLIENT_FIELD],
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Words to find in a matter's title or name, or an exact file number "
+                    "such as 24-0624. Matches inside longer words too."
+                ),
+                min_length=2,
+                max_length=LEGISTAR_MAX_TEXT,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        introduced_from: Annotated[str | None, DATE_FIELD] = None,
+        introduced_to: Annotated[str | None, DATE_FIELD] = None,
+        limit: Annotated[int, Field(ge=1, le=LEGISTAR_MAX_LIMIT)] = 50,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "client": client,
+            "text": text,
+            "introduced_from": introduced_from,
+            "introduced_to": introduced_to,
+            "limit": limit,
+        }
+        return await run_lookup(
+            ctx,
+            action="search_legislation",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=LEGISTAR_HOST,
+            prepare=lambda state: legistar(state).search_legislation(**arguments),
+        )
+
+    def sec(state: AppState) -> SecEdgar:
+        if state.sec is None:
+            raise RuntimeError("The SEC source was not built")
+        return state.sec
+
+    @server.tool(
+        name="find_sec_filings",
+        description=(
+            "List one company's filings in the SEC's EDGAR system, newest first, with links "
+            "to each filing index and main document. Give a ticker, a CIK, or the exact EDGAR "
+            "company name; a name that is not exact returns candidates and is never guessed. "
+            "A row shows that a filing was submitted and says nothing about its content. Same "
+            "response shape and rules as query_dataset. Failures return isError=true."
+        ),
+    )
+    async def find_sec_filings(
+        company: Annotated[
+            str,
+            Field(
+                description=(
+                    "A ticker such as AAPL, a CIK of up to 10 digits, or the exact company "
+                    "name as EDGAR shows it."
+                ),
+                min_length=1,
+                max_length=MAX_COMPANY_LENGTH,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        form_types: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=25)]] | None,
+            Field(
+                description=(
+                    "EDGAR form types, matched exactly, such as 10-K, 10-K/A, 8-K, 4, or D."
+                ),
+                max_length=MAX_FORM_TYPES,
+            ),
+        ] = None,
+        filed_after: Annotated[
+            str | None,
+            Field(
+                description="Earliest filing date to include, YYYY-MM-DD, inclusive.",
+                min_length=10,
+                max_length=10,
+            ),
+        ] = None,
+        filed_before: Annotated[
+            str | None,
+            Field(
+                description="Latest filing date to include, YYYY-MM-DD, inclusive.",
+                min_length=10,
+                max_length=10,
+            ),
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=SEC_MAX_LIMIT)] = SEC_DEFAULT_LIMIT,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "company": company,
+            "form_types": form_types,
+            "filed_after": filed_after,
+            "filed_before": filed_before,
+            "limit": limit,
+        }
+        return await run_lookup(
+            ctx,
+            action="find_sec_filings",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=SEC_HOST,
+            prepare=lambda state: sec(state).find_filings(**arguments),
+        )
+
+    def usaspending(state: AppState) -> USAspending:
+        if state.usaspending is None:
+            raise RuntimeError("The USAspending source was not built")
+        return state.usaspending
+
+    @server.tool(
+        name="search_federal_awards",
+        description=(
+            "Find federal prime awards on USAspending.gov, such as contracts, grants, loans, "
+            "direct payments, or other assistance, by keyword, recipient name, or the state "
+            "and county where the work is done. Rows are sorted by award amount, largest "
+            "first, and each links to its public award page. The date range returns awards "
+            "with activity in that period, so check each award's start date before calling it "
+            "new. Same response shape and rules as query_dataset; this source offers no "
+            "rerunnable link, so the response carries the exact request body instead."
+        ),
+    )
+    async def search_federal_awards(
+        award_type: Annotated[
+            Literal["contracts", "grants", "loans", "direct_payments", "other"],
+            Field(description="One award group; grants include cooperative agreements."),
+        ],
+        start_date: Annotated[str, DATE_FIELD],
+        end_date: Annotated[str, DATE_FIELD],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        keywords: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=MAX_KEYWORD_LENGTH)]] | None,
+            Field(
+                description=(
+                    "Plain words or phrases; an award matching any one is included. Give "
+                    "keywords, recipient, or state."
+                ),
+                max_length=MAX_KEYWORDS,
+            ),
+        ] = None,
+        recipient: Annotated[
+            str | None,
+            Field(
+                description="Part of a recipient or parent company name, or a UEI.",
+                min_length=1,
+                max_length=MAX_RECIPIENT_LENGTH,
+            ),
+        ] = None,
+        state: Annotated[
+            str | None,
+            Field(
+                description="Two-letter postal code of the place of performance.",
+                min_length=2,
+                max_length=2,
+            ),
+        ] = None,
+        county: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Three-digit county FIPS code of the place of performance; needs state."
+                ),
+                min_length=3,
+                max_length=3,
+            ),
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=AWARDS_MAX_LIMIT)] = AWARDS_DEFAULT_LIMIT,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "award_type": award_type,
+            "start_date": start_date,
+            "end_date": end_date,
+            "keywords": keywords,
+            "recipient": recipient,
+            "state": state,
+            "county": county,
+            "limit": limit,
+        }
+        return await run_lookup(
+            ctx,
+            action="search_federal_awards",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=USASPENDING_HOST,
+            prepare=lambda state_: usaspending(state_).search_awards(**arguments),
+        )
+
+    def govinfo(state: AppState) -> GovInfo:
+        if state.govinfo is None:
+            raise RuntimeError("The GovInfo source was not built")
+        return state.govinfo
+
+    @server.tool(
+        name="search_court_opinions",
+        description=(
+            "Search federal court opinions in GovInfo's United States Courts Opinions "
+            "collection. Returns GovInfo's count of matching opinion documents and the "
+            "top-ranked page, with a public link to each opinion. Use it for what opinions "
+            "say. It covers only selected federal courts, mostly from 2004 on, and holds no "
+            "dockets. Same response shape and rules as query_dataset."
+        ),
+    )
+    async def search_court_opinions(
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Words that must all appear in the opinion. Punctuation and search "
+                    "operators count as plain words."
+                ),
+                min_length=1,
+                max_length=OPINIONS_MAX_TEXT,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        court: Annotated[
+            str | None,
+            Field(
+                description="Optional GovInfo court code, such as ca9 or cand.",
+                min_length=2,
+                max_length=10,
+            ),
+        ] = None,
+        issued_from: Annotated[str | None, DATE_FIELD] = None,
+        issued_to: Annotated[str | None, DATE_FIELD] = None,
+        limit: Annotated[int, Field(ge=1, le=OPINIONS_MAX_LIMIT)] = OPINIONS_DEFAULT_LIMIT,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "text": text,
+            "court": court,
+            "issued_from": issued_from,
+            "issued_to": issued_to,
+            "limit": limit,
+        }
+        return await run_lookup(
+            ctx,
+            action="search_court_opinions",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=GOVINFO_HOST,
+            prepare=lambda state_: govinfo(state_).search_opinions(**arguments),
+        )
+
+    def census(state: AppState) -> CensusData:
+        if state.census is None:
+            raise RuntimeError("The Census data source was not built")
+        return state.census
+
+    @server.tool(
+        name="get_census_data",
+        description=(
+            "Get American Community Survey 5-year estimates from the U.S. Census Bureau's "
+            "Census Data API for one or more geographies, such as every tract in a county. "
+            "Each row is one geography, with the requested variables exactly as the API "
+            "returns them, and the dataset name carries their official labels. Request each "
+            "estimate's margin-of-error variable (E becomes M) and include NAME. At most "
+            f"{MAX_VARIABLES} variables and 5,000 geographies per call. Same response shape "
+            "and rules as query_dataset."
+        ),
+    )
+    async def get_census_data(
+        year: Annotated[
+            int,
+            Field(description="Final year of the 5-year period; 2024 means 2020 to 2024."),
+        ],
+        variables: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=50)]],
+            Field(
+                description="Variable names, such as NAME, B19013_001E, B19013_001M.",
+                min_length=1,
+                max_length=MAX_VARIABLES,
+            ),
+        ],
+        geography_for: Annotated[
+            str,
+            Field(
+                description="One level:codes clause, such as tract:*, county:075, place:67000.",
+                min_length=3,
+                max_length=500,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        geography_in: Annotated[
+            str | None,
+            Field(
+                description='Optional parent clauses, such as "state:06 county:075".',
+                min_length=3,
+                max_length=500,
+            ),
+        ] = None,
+        dataset: Annotated[
+            Literal["acs/acs5", "acs/acs5/subject", "acs/acs5/profile"],
+            Field(description="Detailed tables, subject tables, or data profiles."),
+        ] = "acs/acs5",
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "year": year,
+            "variables": variables,
+            "geography_for": geography_for,
+            "geography_in": geography_in,
+            "dataset": dataset,
+        }
+        return await run_lookup(
+            ctx,
+            action="get_census_data",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=CENSUS_DATA_HOST,
+            prepare=lambda state_: census(state_).get_data(**arguments),
+        )
+
     @server.tool(
         name="pin_snapshot",
         description=(
             "Preserve a temporary query snapshot indefinitely for a published story. Use the "
-            "snapshot URI returned by query_dataset or geocode_address."
+            "snapshot URI that a query or lookup tool returned."
         ),
     )
     async def pin_snapshot(

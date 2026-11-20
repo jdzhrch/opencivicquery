@@ -26,9 +26,28 @@ EXPECTED_TOOLS = {
     "describe_dataset",
     "query_dataset",
     "geocode_address",
+    "find_meetings",
+    "get_meeting_items",
+    "get_item_votes",
+    "search_legislation",
+    "find_sec_filings",
+    "search_federal_awards",
+    "search_court_opinions",
+    "get_census_data",
     "pin_snapshot",
     "get_snapshot",
 }
+LOOKUP_TOOLS = (
+    "geocode_address",
+    "find_meetings",
+    "get_meeting_items",
+    "get_item_votes",
+    "search_legislation",
+    "find_sec_filings",
+    "search_federal_awards",
+    "search_court_opinions",
+    "get_census_data",
+)
 
 
 def open_settings(config_path: Path, tmp_path: Path, **overrides) -> RuntimeSettings:
@@ -72,8 +91,10 @@ def test_mcp_tools_expose_source_identity_and_safety_fields(
     assert "domain" not in search_schema["required"]
     # Required, not optional: an optional field is the one a model quietly stops filling,
     # and the reporter's own wording is the part of the record nothing else reconstructs.
-    for name in ("search_datasets", "describe_dataset", "query_dataset", "geocode_address"):
+    for name in ("search_datasets", "describe_dataset", "query_dataset", *LOOKUP_TOOLS):
         assert "reporter_question" in tools[name].parameters["required"], name
+    for name in LOOKUP_TOOLS:
+        assert name in server.instructions, name
     address_schema = tools["geocode_address"].parameters["properties"]["address"]
     assert address_schema["minLength"] == 1
     assert address_schema["maxLength"] == 200
@@ -399,6 +420,10 @@ async def test_list_source_packs_needs_no_network(local_config_path: Path, tmp_p
 
     assert result.is_error is False
     packs = result.structured_content["packs"]
-    assert [pack["domain"] for pack in packs] == ["data.sf.gov", "data.cityofnewyork.us"]
+    assert [pack["domain"] for pack in packs] == [
+        "data.sf.gov",
+        "data.cityofnewyork.us",
+        "datacatalog.cookcountyil.gov",
+    ]
     assert packs[0]["checked_on"] == "2026-10-27"
     assert {"dataset_id": "5cei-gny5", "name": "Eviction Notices"} in packs[0]["datasets"]

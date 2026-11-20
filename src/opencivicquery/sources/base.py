@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from opencivicquery.models import (
@@ -86,3 +88,33 @@ class AddressGeocoder(Protocol):
         ...
 
     async def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """One finished record lookup: the result to freeze and what a reader must be told."""
+
+    result: SourceQueryResult
+    row_grain: str
+    """What one row of result.rows represents, from the source's own documentation."""
+    warnings: list[str]
+    """The documented caveats that apply to this result, most urgent first."""
+    rules: list[str] = field(default_factory=list)
+    """Presentation rules specific to this result, most urgent first."""
+    escalations: list[str] = field(default_factory=list)
+    """Stable codes for the urgent rules above, for the audit record."""
+
+
+@dataclass(frozen=True)
+class PreparedLookup:
+    """A validated request to one fixed host, ready to run once the usage check passes.
+
+    Building one must not touch the network, so an invalid request never costs an
+    allowance or reaches the source.
+    """
+
+    host: str
+    """The fixed host it calls. It doubles as the per-minute usage bucket."""
+    arguments: dict[str, Any]
+    """The normalized arguments, recorded in the audit log."""
+    run: Callable[[], Awaitable[Lookup]]

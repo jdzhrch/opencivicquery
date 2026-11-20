@@ -86,7 +86,7 @@ FRESHNESS_WARNING = (
 
 def _invisible(text: str) -> bool:
     """Control and format characters, such as NUL, ESC, zero-width space, or a bidi override."""
-    return any(unicodedata.category(character) in {"Cc", "Cf"} for character in text)
+    return any(unicodedata.category(character) in {"Cc", "Cf", "Cs"} for character in text)
 
 
 def validate_address(address: str) -> str:
