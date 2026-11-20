@@ -21,6 +21,8 @@ _PATTERNS: tuple[re.Pattern[str], ...] = (
     # Data API keys that travel as query parameters, such as the Census Data API's key=
     # and api.data.gov's api_key=. A backslash ends the value so JSON escapes survive.
     re.compile(r"(\b(?:api_)?key=)[^&\s\"'\\]+", re.IGNORECASE),
+    # Legistar takes a per-jurisdiction token as a query parameter.
+    re.compile(r"(\btoken=)[^&\s\"'\\]+", re.IGNORECASE),
 )
 
 

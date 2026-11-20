@@ -1065,7 +1065,7 @@ def patch_legistar(
         return response
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(mcp_server, "Legistar", lambda: Legistar(client=client))
+    monkeypatch.setattr(mcp_server, "Legistar", lambda **kwargs: Legistar(client=client, **kwargs))
     return client, requests
 
 

@@ -387,7 +387,15 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             service = _build_service(settings)
             # Callbacks run in reverse order, and each one runs even if another fails.
             stack.push_async_callback(service.close)
-            state = AppState(service=service, legistar=Legistar())
+            state = AppState(
+                service=service,
+                legistar=Legistar(
+                    tokens={
+                        name: token.get_secret_value()
+                        for name, token in settings.legistar_tokens.items()
+                    }
+                ),
+            )
             stack.push_async_callback(state.legistar.close)
             state.sec = SecEdgar(contact=settings.sec_contact)
             stack.push_async_callback(state.sec.close)
@@ -606,8 +614,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "with its agenda and minutes PDF links, the minutes status, and the meeting page "
             "to cite. The response has the same shape as query_dataset, including warnings, "
             "presentation_rules, a public query_url, and an evidence snapshot; obey every "
-            "presentation rule. Some jurisdictions, such as New York City, require a token "
-            "this server does not hold. Failures return isError=true with an error object."
+            "presentation rule. Some jurisdictions, such as New York City, require their own "
+            "token, and a tool error says when this server lacks one. Failures return "
+            "isError=true with an error object."
         ),
     )
     async def find_meetings(

@@ -68,7 +68,7 @@ Many cities and counties publish their meetings through Granicus [Legistar](http
 
 The caller names a Legistar client, the first part of the jurisdiction's Legistar address, such as `oakland` for oakland.legistar.com. Every request goes to `webapi.legistar.com`; the client name is checked against a strict pattern before it becomes part of the path. Answers carry the same evidence as a dataset query, and the warnings come from the Legistar documentation or a dated live check: the API returns only records the clerk marked public, records can change after retrieval and minutes carry a status such as DRAFT, an empty result or tally does not mean nothing happened, and the legislation search matches text inside longer words. Replies are capped at 1,000 records, Legistar's own limit, and a full page is reported as truncated.
 
-Some jurisdictions, including New York City and Philadelphia, require their own Legistar token, which this server does not hold. The tools return the agenda and minutes links and leave meeting video and captions to the jurisdiction's own site.
+Some jurisdictions, including New York City and Philadelphia, require their own Legistar token. A server can hold one per jurisdiction in `OPENCIVICQUERY_LEGISTAR_TOKEN_<CLIENT>`, such as `OPENCIVICQUERY_LEGISTAR_TOKEN_NYC`; it goes only into the outgoing request, never into a link, a snapshot, or a log line, and the answer says that a reader needs a token of their own to rerun the link. The tools return the agenda and minutes links and leave meeting video and captions to the jurisdiction's own site.
 
 ## SEC filings
 
@@ -201,6 +201,7 @@ Environment variables:
 | `OPENCIVICQUERY_SNAPSHOT_BUCKET` | | Bucket for Cloud Storage snapshots |
 | `OPENCIVICQUERY_SEC_CONTACT` | | Name and email the SEC asks every automated client to declare. Without it, `find_sec_filings` refuses to run. |
 | `OPENCIVICQUERY_CENSUS_API_KEY` | | Free Census Data API key. Without it, the census data tool refuses to run. |
+| `OPENCIVICQUERY_LEGISTAR_TOKEN_<CLIENT>` | | Legistar token for one jurisdiction that requires one, such as `OPENCIVICQUERY_LEGISTAR_TOKEN_NYC`. Underscores in the client name stand for hyphens. |
 | `OPENCIVICQUERY_GOVINFO_API_KEY` | | Free api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run. |
 
 Login is off by default. A newsroom that wants per-reporter attribution can turn on Google sign-in; see `deployments/newsroom-with-login.example.yaml` and the OAuth variables in `.env.example`. A deployment file with an `access` section refuses to start while login is off, so a forgotten setting never opens a private instance to everyone.

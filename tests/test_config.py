@@ -515,3 +515,20 @@ def test_config_hash_covers_every_loaded_pack(
     after = load_deployment(path).config_sha256
 
     assert before != after
+
+
+def test_legistar_tokens_come_from_one_variable_per_client(
+    monkeypatch: pytest.MonkeyPatch, local_config_path: Path
+) -> None:
+    monkeypatch.setenv("OPENCIVICQUERY_CONFIG_PATH", str(local_config_path))
+    monkeypatch.setenv("OPENCIVICQUERY_LEGISTAR_TOKEN_NYC", "nyc-token")
+    monkeypatch.setenv("OPENCIVICQUERY_LEGISTAR_TOKEN_SAN_MATEO", "sm-token")
+    monkeypatch.setenv("OPENCIVICQUERY_LEGISTAR_TOKEN_EMPTY", "")
+
+    settings = RuntimeSettings.from_environment()
+
+    assert {name: token.get_secret_value() for name, token in settings.legistar_tokens.items()} == {
+        "nyc": "nyc-token",
+        "san-mateo": "sm-token",
+    }
+    assert "nyc-token" not in repr(settings)

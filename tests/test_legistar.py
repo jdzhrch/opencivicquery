@@ -16,6 +16,7 @@ from opencivicquery.sources.legistar import (
     MEETING_FIELDS,
     NO_DATE_WARNING,
     SUBSTRING_WARNING,
+    TOKEN_LINK_WARNING,
     VOTE_RECORD_WARNING,
     Legistar,
 )
@@ -439,3 +440,76 @@ async def test_a_date_filter_on_legislation_warns_about_undated_matters() -> Non
 
     assert NO_DATE_WARNING in dated.warnings
     assert NO_DATE_WARNING not in undated.warnings
+
+
+TOKEN = "dGVzdC10b2tlbi12YWx1ZQ=="
+
+
+def tokened(
+    route: Callable[[httpx.Request], httpx.Response],
+) -> tuple[Legistar, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return route(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return Legistar(client=client, tokens={"nyc": TOKEN}), requests
+
+
+@pytest.mark.asyncio
+async def test_a_client_token_is_sent_but_never_cited() -> None:
+    legistar, requests = tokened(always(httpx.Response(200, json=[EVENT])))
+
+    found = await legistar.find_meetings(
+        client="nyc", start_date="2026-11-01", end_date="2026-11-19"
+    ).run()
+
+    assert requests[0].url.params["token"] == TOKEN
+    assert TOKEN not in repr(found)
+    assert "token" not in (found.result.query_url or "")
+    assert TOKEN_LINK_WARNING in found.warnings
+
+
+@pytest.mark.asyncio
+async def test_other_clients_never_receive_the_token() -> None:
+    legistar, requests = tokened(always(httpx.Response(200, json=[EVENT])))
+
+    found = await legistar.find_meetings(
+        client="oakland", start_date="2026-11-01", end_date="2026-11-19"
+    ).run()
+
+    assert "token" not in requests[0].url.params
+    assert TOKEN_LINK_WARNING not in found.warnings
+
+
+@pytest.mark.asyncio
+async def test_a_refused_token_is_named_without_revealing_it() -> None:
+    legistar, _ = tokened(always(httpx.Response(403)))
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="nyc", start_date="2026-11-01", end_date="2026-11-19"
+        ).run()
+
+    assert caught.value.code == "TOKEN_REJECTED"
+    assert TOKEN not in str(caught.value)
+    assert TOKEN not in caught.value.public_message
+
+
+@pytest.mark.parametrize(
+    "tokens", [{"nyc": ""}, {"nyc": "a b"}, {"nyc": "x&y=z"}, {"NYC": TOKEN}, {"../nyc": TOKEN}]
+)
+def test_a_malformed_token_setting_stops_startup(tokens: dict[str, str]) -> None:
+    with pytest.raises(ValueError):
+        Legistar(tokens=tokens)
+
+
+def test_a_token_in_a_logged_url_is_redacted() -> None:
+    from opencivicquery.logging_redaction import scrub
+
+    line = f"GET https://webapi.legistar.com/v1/nyc/events?%24top=1&token={TOKEN} 200"
+
+    assert TOKEN not in scrub(line)
+    assert "access_token=abc" not in scrub("x?access_token=abc")

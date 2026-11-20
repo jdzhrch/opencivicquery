@@ -19,6 +19,10 @@ class ConfigurationError(RuntimeError):
     """A required OpenCivicQuery configuration value is missing or invalid."""
 
 
+LEGISTAR_TOKEN_PREFIX = "OPENCIVICQUERY_LEGISTAR_TOKEN_"
+"""One variable per jurisdiction: OPENCIVICQUERY_LEGISTAR_TOKEN_NYC holds the nyc token."""
+
+
 class RuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +48,8 @@ class RuntimeSettings(BaseModel):
     census_api_key: SecretStr | None = None
     """Census Data API key. Without it, the census data tool refuses to run."""
     govinfo_api_key: SecretStr | None = None
+    legistar_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
+    """Legistar API tokens by client name, for jurisdictions that require one."""
     """api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run."""
 
     @classmethod
@@ -79,6 +85,11 @@ class RuntimeSettings(BaseModel):
             sec_contact=os.getenv("OPENCIVICQUERY_SEC_CONTACT") or None,
             census_api_key=os.getenv("OPENCIVICQUERY_CENSUS_API_KEY") or None,
             govinfo_api_key=os.getenv("OPENCIVICQUERY_GOVINFO_API_KEY") or None,
+            legistar_tokens={
+                name.removeprefix(LEGISTAR_TOKEN_PREFIX).lower().replace("_", "-"): value
+                for name, value in os.environ.items()
+                if name.startswith(LEGISTAR_TOKEN_PREFIX) and value
+            },
         )
         if settings.snapshot_backend == "local" and settings.snapshot_path is None:
             settings = settings.model_copy(

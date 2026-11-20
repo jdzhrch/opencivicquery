@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Mapping
 from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -37,6 +38,9 @@ EARLIEST_DATE = date(1900, 1, 1)
 LATEST_DATE = date(2100, 12, 31)
 
 _CLIENT = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+_TOKEN = re.compile(r"^[A-Za-z0-9+/=_.-]{1,1024}$")
+# official: webapi.legistar.com/Home/Examples gives a token as a URL parameter,
+# token=verylongbase64token.
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _UNKNOWN_CLIENT = "LegistarConnectionString setting is not set up"
 # checked 2026-11-20: an unknown client name, and the retired chicago client, both
@@ -163,6 +167,13 @@ SUBSTRING_WARNING = (
 # title held 'Current' and no word 'rent'; substringof('city council', EventBodyName)
 # matched 'City Council'.
 
+TOKEN_LINK_WARNING = (
+    "This jurisdiction requires its own Legistar API token, which the server adds to each "
+    "request and leaves out of query_url. Opening query_url without a token returns an "
+    "error; cite the meeting or matter page instead."
+)
+# checked 2026-11-20: nyc returned HTTP 403 to a request without a token.
+
 NO_DATE_WARNING = "A date filter leaves out matters that have no introduction date in Legistar."
 # checked 2026-11-20: Oakland lists matters, mostly from before 2008, with an empty
 # MatterIntroDate; a filter on that field cannot match them.
@@ -288,16 +299,33 @@ class Legistar:
 
     host = LEGISTAR_HOST
 
-    def __init__(self, *, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient | None = None,
+        tokens: Mapping[str, str] | None = None,
+    ) -> None:
         self._http = FixedHostClient(source_name=SOURCE_NAME, client=client)
+        self._tokens: dict[str, str] = {}
+        for name, token in (tokens or {}).items():
+            if not _CLIENT.match(name) or not _TOKEN.match(token):
+                raise ValueError("A Legistar token needs a valid client name and token text")
+            self._tokens[name] = token
+
+    def _client_warnings(self, client: str) -> list[str]:
+        """Caveats that depend on the client rather than on the result."""
+        return [TOKEN_LINK_WARNING] if client in self._tokens else []
 
     async def _get(
         self, client: str, path: str, params: dict[str, str], *, by_id: bool = False
     ) -> tuple[Any, str]:
         """Fetch one Legistar resource. Returns the parsed body and the public URL."""
         url = f"{_BASE}/{client}/{path}"
+        # The public link never carries the token, so it can be cited and frozen.
         public_url = f"{url}?{urlencode(params)}" if params else url
-        status, content = await self._http.send("GET", url, params=params or None)
+        token = self._tokens.get(client)
+        sent = {**params, "token": token} if token else params
+        status, content = await self._http.send("GET", url, params=sent or None)
         try:
             payload = json.loads(content) if content else None
         except ValueError:
@@ -317,6 +345,17 @@ class Legistar:
                     f"Legistar has no active client named {client}. Use the first part of "
                     "the jurisdiction's own Legistar address, such as oakland for "
                     "oakland.legistar.com. Some cities have moved to other systems."
+                ),
+            )
+        if status in {401, 403} and token:
+            raise SourceQueryError(
+                f"Legistar client {client} refused this server's token (HTTP {status})",
+                code="TOKEN_REJECTED",
+                argument="client",
+                http_status=status,
+                public_message=(
+                    f"The Legistar client {client} refused the token this server holds. "
+                    "Use the jurisdiction's Legistar website until the token is renewed."
                 ),
             )
         if status in {401, 403}:
@@ -440,7 +479,8 @@ class Legistar:
             return Lookup(
                 result=result,
                 row_grain=MEETING_GRAIN,
-                warnings=[CLERK_EDITS_WARNING, PUBLIC_ONLY_WARNING, LOCAL_TIME_WARNING],
+                warnings=[CLERK_EDITS_WARNING, PUBLIC_ONLY_WARNING, LOCAL_TIME_WARNING]
+                + self._client_warnings(name),
                 rules=[LEGISTAR_RULE],
             )
 
@@ -491,6 +531,7 @@ class Legistar:
                     CLERK_EDITS_WARNING,
                     PUBLIC_ONLY_WARNING,
                     LOCAL_TIME_WARNING,
+                    *self._client_warnings(name),
                 ],
                 rules=[LEGISTAR_RULE],
             )
@@ -553,6 +594,7 @@ class Legistar:
                     VOTE_RECORD_WARNING,
                     CLERK_EDITS_WARNING,
                     PUBLIC_ONLY_WARNING,
+                    *self._client_warnings(name),
                 ],
                 rules=([NO_VOTES_RULE] if not rows else []) + [VOTE_RULE, LEGISTAR_RULE],
                 escalations=["NO_VOTES_RECORDED"] if not rows else [],
@@ -627,6 +669,7 @@ class Legistar:
             warnings = [SUBSTRING_WARNING, CLERK_EDITS_WARNING, PUBLIC_ONLY_WARNING]
             if first or last:
                 warnings.insert(1, NO_DATE_WARNING)
+            warnings.extend(self._client_warnings(name))
             return Lookup(
                 result=result, row_grain=MATTER_GRAIN, warnings=warnings, rules=[LEGISTAR_RULE]
             )
