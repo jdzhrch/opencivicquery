@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 import httpx
 import pytest
 
 from opencivicquery.models import Completeness
+from opencivicquery.sources import legistar as legistar_module
 from opencivicquery.sources.base import SourceError, SourceQueryError
 from opencivicquery.sources.legistar import (
     CLERK_EDITS_WARNING,
@@ -19,6 +22,7 @@ from opencivicquery.sources.legistar import (
     TOKEN_LINK_WARNING,
     VOTE_RECORD_WARNING,
     Legistar,
+    stale_warning,
 )
 
 # Trimmed from live Oakland responses on 2026-11-20.
@@ -83,7 +87,9 @@ def legistar_answering(
         requests.append(request)
         return route(request)
 
-    return Legistar(client=httpx.AsyncClient(transport=httpx.MockTransport(handler))), requests
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    # The fixtures' matters date from 2024, so a fixed day keeps them from reading as stale.
+    return Legistar(client=client, today=lambda: date(2024, 12, 1)), requests
 
 
 def always(response: httpx.Response) -> Callable[[httpx.Request], httpx.Response]:
@@ -455,7 +461,7 @@ def tokened(
         return route(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return Legistar(client=client, tokens={"nyc": TOKEN}), requests
+    return Legistar(client=client, tokens={"nyc": TOKEN}, today=lambda: date(2024, 12, 1)), requests
 
 
 @pytest.mark.asyncio
@@ -513,3 +519,159 @@ def test_a_token_in_a_logged_url_is_redacted() -> None:
 
     assert TOKEN not in scrub(line)
     assert "access_token=abc" not in scrub("x?access_token=abc")
+
+
+def newest_matter_request(request: httpx.Request) -> bool:
+    return request.url.params.get("$select") == "MatterIntroDate"
+
+
+def stale_route(newest: httpx.Response) -> Callable[[httpx.Request], httpx.Response]:
+    def route(request: httpx.Request) -> httpx.Response:
+        if newest_matter_request(request):
+            return newest
+        return httpx.Response(200, json=[MATTER])
+
+    return route
+
+
+@pytest.mark.asyncio
+async def test_an_api_copy_that_stopped_updating_escalates() -> None:
+    # checked 2026-11-21: sfgov's newest matter was introduced on 2020-09-17.
+    legistar, requests = legistar_answering(
+        stale_route(httpx.Response(200, json=[{"MatterIntroDate": "2020-09-17T00:00:00"}]))
+    )
+
+    found = await legistar.search_legislation(client="sfgov", text="Mission Street").run()
+
+    (newest,) = [request for request in requests if newest_matter_request(request)]
+    assert len(requests) == 2
+    assert dict(newest.url.params) == {
+        "$filter": "MatterIntroDate lt datetime'2024-12-02'",
+        "$top": "1",
+        "$orderby": "MatterIntroDate desc",
+        "$select": "MatterIntroDate",
+    }
+    assert found.warnings[0] == stale_warning("sfgov", date(2020, 9, 17))
+    assert found.rules[0].startswith("STALE API COPY")
+    assert "https://sfgov.legistar.com" in found.rules[0]
+    assert found.escalations == ["LEGISTAR_API_STALE"]
+    assert found.result.returned_row_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "newest",
+    [
+        httpx.Response(200, json=[{"MatterIntroDate": "2024-11-19T00:00:00"}]),
+        httpx.Response(200, json=[{"MatterIntroDate": None}]),
+        httpx.Response(200, json=[]),
+        httpx.Response(200, json=[{"MatterIntroDate": "not a date"}]),
+        httpx.Response(500, json={"Message": "An error has occurred."}),
+    ],
+)
+async def test_a_current_or_unknown_newest_matter_adds_no_stale_caveat(
+    newest: httpx.Response,
+) -> None:
+    legistar, _ = legistar_answering(stale_route(newest))
+
+    found = await legistar.search_legislation(client="oakland", text="renters").run()
+
+    assert found.warnings[0] == SUBSTRING_WARNING
+    assert found.escalations == []
+    assert found.result.returned_row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_client_side_setting_error_is_named() -> None:
+    # checked 2026-11-21: sfgov's events resource answers this way to every request.
+    reason = (
+        "'Agenda Draft Status' or 'Agenda Status Not Vievable By The Public' is not setup in "
+        "settings. Value should be greater than 0."
+    )
+    legistar, _ = legistar_answering(
+        always(httpx.Response(400, text=reason, headers={"Content-Type": "text/plain"}))
+    )
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2025-11-01", end_date="2025-11-30"
+        ).run()
+
+    assert caught.value.code == "CLIENT_MISCONFIGURED"
+    assert caught.value.argument == "client"
+    assert reason in caught.value.public_message
+    assert "https://sfgov.legistar.com" in caught.value.public_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("newest", "stale"), [("2024-06-04", False), ("2024-06-03", True)])
+async def test_the_stale_line_is_180_days(newest: str, stale: bool) -> None:
+    # The helper fixes today at 2024-12-01; 180 days earlier is 2024-06-04.
+    legistar, _ = legistar_answering(
+        stale_route(httpx.Response(200, json=[{"MatterIntroDate": f"{newest}T00:00:00"}]))
+    )
+
+    found = await legistar.search_legislation(client="oakland", text="renters").run()
+
+    assert (found.escalations == ["LEGISTAR_API_STALE"]) is stale
+
+
+@pytest.mark.asyncio
+async def test_a_slow_newest_matter_check_never_sinks_the_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(legistar_module, "NEWEST_MATTER_TIMEOUT_SECONDS", 0.05)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if newest_matter_request(request):
+            await asyncio.sleep(5)
+            return httpx.Response(200, json=[{"MatterIntroDate": "2020-09-17T00:00:00"}])
+        return httpx.Response(200, json=[MATTER])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    legistar = Legistar(client=client, today=lambda: date(2026, 11, 21))
+
+    found = await asyncio.wait_for(
+        legistar.search_legislation(client="sfgov", text="renters").run(), timeout=2
+    )
+
+    assert found.result.returned_row_count == 1
+    assert found.escalations == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_search_cancels_the_newest_matter_check() -> None:
+    started = asyncio.Event()
+    finished: list[bool] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if newest_matter_request(request):
+            started.set()
+            await asyncio.sleep(1)
+            finished.append(True)
+            return httpx.Response(200, json=[])
+        await started.wait()
+        return httpx.Response(500, json={"Message": "An error has occurred."})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    legistar = Legistar(client=client, today=lambda: date(2026, 11, 21))
+
+    with pytest.raises(SourceQueryError):
+        await legistar.search_legislation(client="oakland", text="renters").run()
+    await asyncio.sleep(0)
+
+    assert finished == []
+
+
+@pytest.mark.asyncio
+async def test_a_tokened_legislation_search_never_cites_the_token() -> None:
+    legistar, requests = tokened(
+        stale_route(httpx.Response(200, json=[{"MatterIntroDate": "2020-09-17T00:00:00"}]))
+    )
+
+    found = await legistar.search_legislation(client="nyc", text="rent").run()
+
+    assert all(request.url.params["token"] == TOKEN for request in requests)
+    assert len(requests) == 2
+    assert TOKEN not in repr(found)
+    assert found.escalations == ["LEGISTAR_API_STALE"]

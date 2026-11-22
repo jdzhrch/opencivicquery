@@ -7,11 +7,12 @@ a path segment.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -45,6 +46,19 @@ _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _UNKNOWN_CLIENT = "LegistarConnectionString setting is not set up"
 # checked 2026-11-20: an unknown client name, and the retired chicago client, both
 # returned HTTP 500 with this ExceptionMessage.
+_CLIENT_SETTING = "is not setup in settings"
+# checked 2026-11-21: sfgov answered every events request, even events/10000, with HTTP
+# 400, a text/plain body, and the message "'Agenda Draft Status' or 'Agenda Status Not
+# Vievable By The Public' is not setup in settings. Value should be greater than 0."
+STALE_AFTER = timedelta(days=180)
+NEWEST_MATTER_TIMEOUT_SECONDS = 10.0
+# checked 2026-11-21: the newest MatterIntroDate was 2026-11-19 for oakland and
+# 2026-11-16 for sanjose, but 2020-09-17 for sfgov, whose Legistar website lists 2026
+# meetings and whose API holds no file 240001 or 250001. A legislature in recess can go a
+# few months without a new matter, so the 180-day line is a judgment, not a documented
+# rule, and the warning is worded as a condition. The check runs alongside the search and
+# gives up after its own timeout, so it cannot hold a finished search past the service's
+# deadline.
 
 MEETING_FIELDS = (
     "EventId",
@@ -178,6 +192,25 @@ NO_DATE_WARNING = "A date filter leaves out matters that have no introduction da
 # checked 2026-11-20: Oakland lists matters, mostly from before 2008, with an empty
 # MatterIntroDate; a filter on that field cannot match them.
 
+
+def stale_warning(client: str, newest: date) -> str:
+    return (
+        f"The newest matter that the Legistar API holds for {client} was introduced on "
+        f"{newest.isoformat()}, more than 180 days ago. If {client} introduced matters after "
+        "that day, this API does not hold them, whatever dates you ask for; "
+        f"https://{client}.legistar.com may list them. An empty or short result here does "
+        "not show that no newer legislation exists."
+    )
+
+
+def stale_rule(client: str, newest: date) -> str:
+    return (
+        f"STALE API COPY. Say that the Legistar API for {client} holds no matter introduced "
+        f"after {newest.isoformat()}, and send the reader to https://{client}.legistar.com "
+        "for anything newer. Never report that no newer legislation exists."
+    )
+
+
 NO_VOTES_RULE = (
     "NO MEMBER VOTES RECORDED. Say that Legistar lists no member votes for this item. Do "
     "not say the item had no vote; check the action, the result, and the minutes file."
@@ -304,8 +337,10 @@ class Legistar:
         *,
         client: httpx.AsyncClient | None = None,
         tokens: Mapping[str, str] | None = None,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._http = FixedHostClient(source_name=SOURCE_NAME, client=client)
+        self._today = today
         self._tokens: dict[str, str] = {}
         for name, token in (tokens or {}).items():
             if not _CLIENT.match(name) or not _TOKEN.match(token):
@@ -380,6 +415,21 @@ class Legistar:
                 public_message=(
                     "Legistar has no public record with that ID for this client. Use an ID "
                     "that find_meetings or get_meeting_items returned for the same client."
+                ),
+            )
+        text = content[:300].decode("utf-8", "replace") if payload is None else ""
+        if status == 400 and _CLIENT_SETTING in text:
+            reason = " ".join(text.split())
+            raise SourceQueryError(
+                f"Legistar client {client} is misconfigured for {path}: {reason}",
+                code="CLIENT_MISCONFIGURED",
+                argument="client",
+                http_status=status,
+                public_message=(
+                    f"The Legistar API for {client} cannot answer this request because of a "
+                    f"setting on the jurisdiction's side. Legistar says: {reason} Use "
+                    f"https://{client}.legistar.com instead, and ask the clerk's office to "
+                    "fix the API setting."
                 ),
             )
         message = payload.get("Message") if isinstance(payload, dict) else None
@@ -640,7 +690,14 @@ class Legistar:
         )
 
         async def run() -> Lookup:
-            records, public_url = await self._list(name, "matters", params)
+            check = asyncio.create_task(self._newest_matter(name))
+            try:
+                records, public_url = await self._list(name, "matters", params)
+            except BaseException:
+                check.cancel()
+                raise
+            # Bounded by the check's own timeout, counted from when both started.
+            newest = await check
             rows = []
             for record in records[:count]:
                 row = _project(record, MATTER_FIELDS)
@@ -670,8 +727,18 @@ class Legistar:
             if first or last:
                 warnings.insert(1, NO_DATE_WARNING)
             warnings.extend(self._client_warnings(name))
+            rules = [LEGISTAR_RULE]
+            escalations: list[str] = []
+            if newest is not None and newest < self._today() - STALE_AFTER:
+                warnings.insert(0, stale_warning(name, newest))
+                rules.insert(0, stale_rule(name, newest))
+                escalations.append("LEGISTAR_API_STALE")
             return Lookup(
-                result=result, row_grain=MATTER_GRAIN, warnings=warnings, rules=[LEGISTAR_RULE]
+                result=result,
+                row_grain=MATTER_GRAIN,
+                warnings=warnings,
+                rules=rules,
+                escalations=escalations,
             )
 
         return PreparedLookup(
@@ -685,6 +752,35 @@ class Legistar:
             },
             run=run,
         )
+
+    async def _newest_matter(self, client: str) -> date | None:
+        """The introduction date of the newest matter the API holds, or None if unknown.
+
+        The date only adds a caveat, so its failure must not sink a search that already
+        succeeded.
+        """
+        # A mis-keyed future date would otherwise hide a stopped copy.
+        tomorrow = self._today() + timedelta(days=1)
+        params = {
+            "$filter": f"MatterIntroDate lt {_datetime_literal(tomorrow)}",
+            "$top": "1",
+            "$orderby": "MatterIntroDate desc",
+            "$select": "MatterIntroDate",
+        }
+        try:
+            async with asyncio.timeout(NEWEST_MATTER_TIMEOUT_SECONDS):
+                records, _ = await self._list(client, "matters", params)
+        except (SourceError, TimeoutError):
+            return None
+        value = (
+            records[0].get("MatterIntroDate") if records and isinstance(records[0], dict) else None
+        )
+        if not isinstance(value, str) or not _DATE.match(value[:10]):
+            return None
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
 
     async def close(self) -> None:
         await self._http.close()
