@@ -94,7 +94,7 @@ Use `geocode_address` only for places in public records or places the reporter n
 
 Many cities and counties publish meetings through Legistar. For what a council, committee, board, or commission did, call `find_meetings` with the jurisdiction's Legistar client name, the first part of its Legistar address, such as oakland for oakland.legistar.com. Then call `get_meeting_items` for a meeting's agenda items and recorded actions, and `get_item_votes` for how each member voted on one item. To follow a measure across meetings, call `search_legislation` with words from its title or its file number. If you do not know the client name, ask the reporter for the jurisdiction's Legistar web address rather than trying several names; an unknown name returns a clear error.
 
-Give the minutes status, such as DRAFT or FINAL, beside any action or vote you report, and cite the meeting page or the matter page. An empty action or tally does not mean nothing happened: check the votes and the minutes file before saying an item had no vote. Some places, such as New York City (client nyc), need their own token. When a tool says the server lacks one, point the reporter to the jurisdiction's own Legistar site. These tools read records, not transcripts. For what was said at a meeting, use the meeting channels in [references/where-else-to-look.md](references/where-else-to-look.md).
+Give the minutes status, such as DRAFT or FINAL, beside any action or vote you report, and cite the meeting page or the matter page. An empty action or tally does not mean nothing happened: check the votes and the minutes file before saying an item had no vote. Some places, such as New York City (client nyc), need their own token. When a tool says the server lacks one, point the reporter to the jurisdiction's own Legistar site. Some places' Legistar API stopped updating while their website stayed current: San Francisco's (client sfgov) holds no matter introduced after 2020 and cannot list meetings at all. When a tool says an API copy is stale or a client is misconfigured, send the reporter to the website and never report that newer legislation does not exist. These tools read records, not transcripts. For what was said at a meeting, use the meeting channels in [references/where-else-to-look.md](references/where-else-to-look.md).
 
 ## Company filings with the SEC
 
@@ -103,6 +103,10 @@ For a company's filings with the SEC, such as annual reports, 8-K event reports,
 ## Federal contracts and grants
 
 For federal money that went to a place, a company, or a program, call `search_federal_awards` with one award type (contracts, grants, loans, direct payments, or other), a date range, and keywords, a recipient, or a state with an optional county code. An award appears when it had activity in the date range, so check its start date before you call it new. Amounts are obligations for the whole award, and the place filter is where the work is done, not where the recipient sits. Each row links to its USAspending page; cite that page.
+
+## Nonprofit tax filings
+
+For a tax-exempt organization's money, such as a city contractor's revenue, assets, or the year its filings stop, call `search_nonprofits` with words from its name and, if known, its state, then call `get_nonprofit_filings` with the EIN of the row the reporter means. The search also matches city names, so confirm the name and city before you pick a row. Each filing row is one tax period, which is the month the fiscal year ended, so name the fiscal year end beside any figure. The summary figures come from different lines on Forms 990, 990-EZ, and 990-PF, and the latest years often have only the filed document, so read the document before you quote a number. Name ProPublica Nonprofit Explorer and the IRS as the source.
 
 ## presentation_rules win
 

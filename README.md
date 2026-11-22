@@ -70,6 +70,8 @@ The caller names a Legistar client, the first part of the jurisdiction's Legista
 
 Some jurisdictions, including New York City and Philadelphia, require their own Legistar token. A server can hold one per jurisdiction in `OPENCIVICQUERY_LEGISTAR_TOKEN_<CLIENT>`, such as `OPENCIVICQUERY_LEGISTAR_TOKEN_NYC`; it goes only into the outgoing request, never into a link, a snapshot, or a log line, and the answer says that a reader needs a token of their own to rerun the link. The tools return the agenda and minutes links and leave meeting video and captions to the jurisdiction's own site.
 
+A jurisdiction's API copy can stop updating while its website stays current. On 2026-11-21 the newest matter in San Francisco's API (client `sfgov`) was introduced on 2020-09-17, and its events resource answered every request with a settings error. So `search_legislation` also asks for the client's newest matter and, when that is more than 180 days old, puts a warning and a rule first in the answer: say the date the API copy stops, and send the reader to the website. A settings error on the jurisdiction's side is reported as such, with Legistar's own message.
+
 ## SEC filings
 
 `find_sec_filings` lists one company's filings from the SEC's [EDGAR submissions API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), newest first, with links to each filing index and main document. It accepts a ticker, a CIK, or an exact EDGAR company name, and when a name is not exact it returns candidates with their CIKs instead of guessing. The SEC asks every automated client to declare a contact, so set `OPENCIVICQUERY_SEC_CONTACT`; without it the tool refuses to run. Requests are spaced to stay under the SEC's limit of 10 a second.
@@ -79,6 +81,10 @@ The warnings come from the SEC's own pages or a dated live check: EDGAR's recent
 ## Federal awards
 
 `search_federal_awards` searches federal prime awards on [USAspending.gov](https://www.usaspending.gov/): contracts, grants, loans, direct payments, and other assistance, by keyword, recipient, or the state and county where the work is done. Each result keeps USAspending's own field names and links every award to its public page. The source answers only POST requests, so the response records the exact request body in place of a rerunnable link. The warnings state the official caveats that change how the numbers read: an award appears when it had activity in the date range, amounts are obligations for the whole award, Defense contracts are published 90 days late, and subawards are not included.
+
+## Nonprofit tax filings
+
+`search_nonprofits` finds tax-exempt organizations by name in ProPublica's [Nonprofit Explorer API](https://projects.propublica.org/nonprofits/api), which republishes the IRS list of exempt organizations, and returns each match's EIN, city, and state. `get_nonprofit_filings` lists one organization's Form 990, 990-EZ, and 990-PF filings, newest tax period first, with total revenue, expenses, assets, and liabilities where the IRS annual extract holds them, and a link to each filed document. The API needs no key. The warnings come from ProPublica's documentation or a dated live check: the search also matches city names, a tax period is the month the fiscal year ended, the summary figures come from different lines on each form type, and the latest years often have only the filed document. ProPublica's data terms require publications that use the data to cite ProPublica, so every answer carries that rule.
 
 ## Federal court opinions
 

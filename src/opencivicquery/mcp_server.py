@@ -39,6 +39,8 @@ from opencivicquery.sources.govinfo import MAX_TEXT_LENGTH as OPINIONS_MAX_TEXT
 from opencivicquery.sources.legistar import LEGISTAR_HOST, Legistar
 from opencivicquery.sources.legistar import MAX_LIMIT as LEGISTAR_MAX_LIMIT
 from opencivicquery.sources.legistar import MAX_TEXT_LENGTH as LEGISTAR_MAX_TEXT
+from opencivicquery.sources.nonprofits import MAX_NAME_LENGTH as NONPROFIT_MAX_NAME
+from opencivicquery.sources.nonprofits import NONPROFITS_HOST, NonprofitExplorer
 from opencivicquery.sources.sec_edgar import DEFAULT_LIMIT as SEC_DEFAULT_LIMIT
 from opencivicquery.sources.sec_edgar import MAX_COMPANY_LENGTH, MAX_FORM_TYPES, SecEdgar
 from opencivicquery.sources.sec_edgar import MAX_LIMIT as SEC_MAX_LIMIT
@@ -72,7 +74,8 @@ SERVER_INSTRUCTIONS = (
     "publish through Legistar, call find_meetings, get_meeting_items, get_item_votes, and "
     "search_legislation. For a company's SEC filings, call find_sec_filings. For federal "
     "contracts, grants, and other awards, call search_federal_awards. For the text of federal "
-    "court opinions, call search_court_opinions. These tools follow "
+    "court opinions, call search_court_opinions. For a tax-exempt organization's IRS Form "
+    "990 filings, call search_nonprofits and then get_nonprofit_filings. These tools follow "
     "the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
@@ -99,6 +102,7 @@ class AppState:
     usaspending: USAspending | None = None
     govinfo: GovInfo | None = None
     census: CensusData | None = None
+    nonprofits: NonprofitExplorer | None = None
     """Record sources that answer through OpenCivicQueryService.lookup. The lifespan
     builds and closes them; None only in tests that never call their tools."""
 
@@ -405,6 +409,8 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             stack.push_async_callback(state.govinfo.close)
             state.census = CensusData(api_key=_secret(settings.census_api_key))
             stack.push_async_callback(state.census.close)
+            state.nonprofits = NonprofitExplorer()
+            stack.push_async_callback(state.nonprofits.close)
             if verifier is not None:
                 stack.push_async_callback(verifier.close)
             if proxy is not None:
@@ -961,6 +967,83 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             arguments=arguments,
             host=GOVINFO_HOST,
             prepare=lambda state_: govinfo(state_).search_opinions(**arguments),
+        )
+
+    def nonprofits(state: AppState) -> NonprofitExplorer:
+        if state.nonprofits is None:
+            raise RuntimeError("The Nonprofit Explorer source was not built")
+        return state.nonprofits
+
+    @server.tool(
+        name="search_nonprofits",
+        description=(
+            "Find tax-exempt organizations by name in ProPublica's Nonprofit Explorer, which "
+            "republishes the IRS list of exempt organizations. Returns each match's EIN, "
+            "name, city, and state, in ProPublica's relevance order, at most 25 per call. The "
+            "words also match city names, so check each row. Use an EIN with "
+            "get_nonprofit_filings. Same response shape and rules as query_dataset."
+        ),
+    )
+    async def search_nonprofits(
+        name: Annotated[
+            str,
+            Field(
+                description="Words from the organization's name, in plain words.",
+                min_length=1,
+                max_length=NONPROFIT_MAX_NAME,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        state: Annotated[
+            str | None,
+            Field(
+                description="Optional two-letter postal code where the organization is based.",
+                min_length=2,
+                max_length=2,
+            ),
+        ] = None,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"name": name, "state": state}
+        return await run_lookup(
+            ctx,
+            action="search_nonprofits",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=NONPROFITS_HOST,
+            prepare=lambda state_: nonprofits(state_).search_nonprofits(**arguments),
+        )
+
+    @server.tool(
+        name="get_nonprofit_filings",
+        description=(
+            "List one tax-exempt organization's IRS Form 990, 990-EZ, and 990-PF filings "
+            "from ProPublica's Nonprofit Explorer, newest tax period first, with total "
+            "revenue, expenses, assets, and liabilities where the IRS extracted them, and a "
+            "link to each filed document. Give the organization's EIN from search_nonprofits. "
+            "Same response shape and rules as query_dataset."
+        ),
+    )
+    async def get_nonprofit_filings(
+        ein: Annotated[
+            str,
+            Field(
+                description="The organization's nine-digit EIN, such as 94-6068564.",
+                min_length=9,
+                max_length=10,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"ein": ein}
+        return await run_lookup(
+            ctx,
+            action="get_nonprofit_filings",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=NONPROFITS_HOST,
+            prepare=lambda state_: nonprofits(state_).get_filings(**arguments),
         )
 
     def census(state: AppState) -> CensusData:

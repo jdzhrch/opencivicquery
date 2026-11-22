@@ -33,6 +33,8 @@ EXPECTED_TOOLS = {
     "find_sec_filings",
     "search_federal_awards",
     "search_court_opinions",
+    "search_nonprofits",
+    "get_nonprofit_filings",
     "get_census_data",
     "pin_snapshot",
     "get_snapshot",
@@ -46,6 +48,8 @@ LOOKUP_TOOLS = (
     "find_sec_filings",
     "search_federal_awards",
     "search_court_opinions",
+    "search_nonprofits",
+    "get_nonprofit_filings",
     "get_census_data",
 )
 
