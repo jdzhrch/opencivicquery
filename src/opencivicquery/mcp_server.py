@@ -621,8 +621,12 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "to cite. The response has the same shape as query_dataset, including warnings, "
             "presentation_rules, a public query_url, and an evidence snapshot; obey every "
             "presentation rule. Some jurisdictions, such as New York City, require their own "
-            "token, and a tool error says when this server lacks one. Failures return "
-            "isError=true with an error object."
+            "token, and a tool error says when this server lacks one. When a jurisdiction's "
+            "API cannot list meetings because of a setting on its side, as San Francisco's "
+            "cannot, the tool reads its public Legistar calendar page instead, at most two "
+            "calendar years per call, and says so; those meetings have agenda and minutes "
+            "files but no items or votes in get_meeting_items. Failures return isError=true "
+            "with an error object."
         ),
     )
     async def find_meetings(

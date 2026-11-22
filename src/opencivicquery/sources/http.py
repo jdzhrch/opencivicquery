@@ -47,12 +47,41 @@ class FixedHostClient:
         *,
         params: dict[str, str] | None = None,
         json_body: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, bytes]:
         """Return the status code and body. Network failures raise SourceError."""
+        status, _, content = await self.send_with_headers(
+            method, url, params=params, json_body=json_body, headers=headers
+        )
+        return status, content
+
+    async def send_with_headers(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, httpx.Headers, bytes]:
+        """Return the status code, response headers, and body.
+
+        headers override the defaults for this request only. A request carries only the
+        cookies its caller names: the client keeps whatever cookies sources set, and one
+        caller's answer must never shape another caller's request.
+        """
+        request = self._client.build_request(
+            method,
+            url,
+            params=params,
+            json=json_body,
+            headers={**self._headers, **(headers or {})},
+        )
+        if not any(name.lower() == "cookie" for name in headers or {}):
+            request.headers.pop("cookie", None)
         try:
-            async with self._client.stream(
-                method, url, params=params, json=json_body, headers=self._headers
-            ) as response:
+            response = await self._client.send(request, stream=True)
+            try:
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
                     content.extend(chunk)
@@ -60,7 +89,9 @@ class FixedHostClient:
                         raise SourceError(
                             f"The {self.source_name} response exceeded the size limit"
                         )
-                return response.status_code, bytes(content)
+                return response.status_code, response.headers, bytes(content)
+            finally:
+                await response.aclose()
         except httpx.TimeoutException as exc:
             raise SourceQueryError(
                 f"The {self.source_name} did not answer in time.",

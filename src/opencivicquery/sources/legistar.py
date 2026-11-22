@@ -3,6 +3,11 @@
 Most Legistar clients answer without a key. Every request goes to one fixed host; the
 caller names only a client, which is checked against a strict pattern before it becomes
 a path segment.
+
+When a client's API refuses to list meetings because of a setting on the jurisdiction's
+side, find_meetings reads the same client's public calendar page instead. That page lives
+at <client>.legistar.com, a host the Web API has just confirmed by naming the client's
+own setting error.
 """
 
 from __future__ import annotations
@@ -13,9 +18,11 @@ import json
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import date, timedelta
+from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin, urlsplit
 
 import httpx
 
@@ -59,6 +66,32 @@ NEWEST_MATTER_TIMEOUT_SECONDS = 10.0
 # rule, and the warning is worded as a condition. The check runs alongside the search and
 # gives up after its own timeout, so it cannot hold a finished search past the service's
 # deadline.
+
+MAX_CALENDAR_YEARS = 2
+CALENDAR_PAGE_ROWS = 100
+CALENDAR_TIMEOUT_SECONDS = 25.0
+# Each year costs one or two pages of about 1 MB. checked 2026-11-22: a sfgov year page
+# was 1,067,607 bytes and answered in 0.7 seconds. The calendar's own time budget ends
+# before the service's 60-second deadline, so a slow site still returns the API's error
+# and its pointer to the website.
+NEXT_YEAR = "Next Year"
+# checked 2026-11-22: the sfgov year menu lists each year to the current one, then Next
+# Year among the relative spans.
+_GRID_ID = "ctl00_ContentPlaceHolder1_gridCalendar_ctl00"
+_YEAR_INPUT_ID = "ctl00_ContentPlaceHolder1_lstYears_Input"
+_BODY_INPUT_ID = "ctl00_ContentPlaceHolder1_lstBodies_Input"
+_BODY_MENU_ID = "ctl00_ContentPlaceHolder1_lstBodies_DropDown"
+# checked 2026-11-22: with "Calendar Body=All" the sfgov body menu showed its first
+# entry, "BOS and Committees", above each named body.
+_SETTING_PREFIX = re.compile(r"^Setting-(\d{1,6})-Calendar Year=")
+_CALENDAR_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
+# checked 2026-11-22: a plain GET of sfgov.legistar.com/Calendar.aspx sets the cookies
+# "Setting-60-Calendar Year=This Month", "Setting-60-Calendar Body=All", and
+# "Setting-60-ASP.calendar_aspx.gridCalendar.SortExpression=MeetingStartDate DESC". Sending
+# "Calendar Year=2026" back on a plain GET returned the 2026 view, 100 rows a page with a
+# pager reading "Page 1 of 2, items 1 to 100 of 181"; "MeetingStartDate ASC" returned the
+# oldest 100, 2026-01-05 to 2026-06-11, and the newest 100 ran from 2026-05-13 to
+# 2026-11-19. The site sent no robots.txt and the page links no terms of use.
 
 MEETING_FIELDS = (
     "EventId",
@@ -225,6 +258,78 @@ VOTE_RULE = (
     "votes are as the clerk recorded them."
 )
 
+CALENDAR_FIELDS = (
+    "EventBodyName",
+    "EventDate",
+    "EventTime",
+    "EventLocation",
+    "EventInSiteURL",
+    "EventAgendaFile",
+    "EventMinutesFile",
+)
+CALENDAR_GRAIN = (
+    "One meeting of one Legistar body, as a row of the jurisdiction's public Legistar "
+    "calendar page."
+)
+
+
+def calendar_warning(client: str) -> str:
+    return (
+        f"The Legistar API for {client} cannot list meetings because of a setting on the "
+        f"jurisdiction's side, so these meetings come from its public calendar page, "
+        f"https://{client}.legistar.com/Calendar.aspx. The page gives each meeting's agenda "
+        "and minutes files but no agenda items or member votes, and get_meeting_items and "
+        "get_item_votes cannot read this client's meetings. Take items, actions, and votes "
+        "from the agenda and minutes files."
+    )
+
+
+def calendar_rule(client: str) -> str:
+    return (
+        f"WEBSITE CALENDAR. Say that these meetings come from the Legistar calendar page of "
+        f"{client} because its API cannot list meetings. Cite each meeting by its "
+        "EventInSiteURL, and take agenda items, actions, and votes only from the agenda and "
+        "minutes files."
+    )
+
+
+CALENDAR_MINUTES_WARNING = (
+    "The clerk's office can change these meetings and files after this retrieval, and the "
+    "calendar page does not say whether minutes are draft or final. The minutes file says "
+    "so on its first page; give that status beside any action or vote you report."
+)
+# checked 2026-11-22: the sfgov minutes file for the 2026-11-17 Board meeting is headed
+# "MEETING MINUTES - DRAFT".
+
+CALENDAR_PAGE_WARNING = (
+    "query_url opens the calendar page on the current month. To see these meetings there, "
+    "choose the year in the page's year menu. EventDate is the meeting's calendar date and "
+    "EventTime its local start time as text."
+)
+
+UNREAD_LINK_WARNING = (
+    "Some agenda, minutes, or meeting links on the calendar page pointed somewhere other "
+    "than the jurisdiction's Legistar site and were left out. A missing link here does not "
+    "show that the document does not exist; open the meeting page."
+)
+
+
+def calendar_gap_warning(gaps: list[tuple[date, date]]) -> str:
+    spans = "; ".join(f"{start.isoformat()} to {end.isoformat()}" for start, end in gaps)
+    return (
+        f"This tool could not read the calendar page's meetings from {spans}: the page "
+        "shows a limited number of meetings per view and lists years only to the next one. "
+        "The list leaves out some or all meetings in that span."
+    )
+
+
+def calendar_gap_rule(gaps: list[tuple[date, date]]) -> str:
+    spans = "; ".join(f"{start.isoformat()} to {end.isoformat()}" for start, end in gaps)
+    return (
+        f"PARTIAL CALENDAR. Say that meetings from {spans} were not read, and never report "
+        "that no meeting took place then."
+    )
+
 
 def _invalid(argument: str, message: str) -> SourceQueryError:
     return SourceQueryError(
@@ -327,6 +432,200 @@ def _item_label(item: dict[str, Any], item_id: int) -> str:
     )
 
 
+@dataclass
+class _Cell:
+    parts: list[str] = field(default_factory=list)
+    links: list[str] = field(default_factory=list)
+
+    def lines(self) -> list[str]:
+        """The cell's text, one entry per line break, whitespace collapsed."""
+        text = "".join(self.parts)
+        return [" ".join(line.split()) for line in text.split("\n") if line.strip()]
+
+
+class _CalendarGrid(HTMLParser):
+    """The header labels and meeting rows of a Legistar calendar page.
+
+    Only the grid table itself is read. Its pager sits in nested tables, whose cells are
+    never taken for meeting rows.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.year: str | None = None
+        self.body: str | None = None
+        self.first_body: str | None = None
+        self.headers: list[str] = []
+        self.rows: list[list[_Cell]] = []
+        self.has_pager = False
+        self._depth = 0
+        self._header: list[str] | None = None
+        self._row: list[_Cell] | None = None
+        self._cell: _Cell | None = None
+        self._body_menu = False
+        self._first_body: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if tag == "input" and attributes.get("id") == _YEAR_INPUT_ID:
+            self.year = attributes.get("value")
+        if tag == "input" and attributes.get("id") == _BODY_INPUT_ID:
+            self.body = attributes.get("value")
+        if tag == "div" and attributes.get("id") == _BODY_MENU_ID:
+            self._body_menu = True
+        if tag == "li" and self._body_menu and self.first_body is None:
+            self._first_body = []
+        if tag == "table":
+            if self._depth:
+                self._depth += 1
+            elif attributes.get("id") == _GRID_ID:
+                self._depth = 1
+            return
+        if not self._depth:
+            return
+        classes = (attributes.get("class") or "").split()
+        if tag == "tr" and "rgPager" in classes:
+            self.has_pager = True
+        if self._depth != 1:
+            return
+        if tag == "tr" and ("rgRow" in classes or "rgAltRow" in classes):
+            if self._row is not None:
+                # An unclosed row would otherwise vanish without a trace.
+                raise SourceError("A Legistar calendar row was never closed")
+            self._row = []
+        elif tag == "th" and "rgHeader" in classes:
+            self._header = []
+        elif tag == "td" and self._row is not None:
+            self._cell = _Cell()
+        elif tag == "a" and self._cell is not None and attributes.get("href"):
+            self._cell.links.append(str(attributes["href"]))
+        elif tag == "br" and self._cell is not None:
+            self._cell.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "li" and self._first_body is not None:
+            self.first_body = " ".join("".join(self._first_body).split())
+            self._first_body = None
+            self._body_menu = False
+        if not self._depth:
+            return
+        if tag == "table":
+            self._depth -= 1
+            return
+        if self._depth != 1:
+            return
+        if tag == "th" and self._header is not None:
+            self.headers.append(" ".join("".join(self._header).split()))
+            self._header = None
+        elif tag == "td" and self._cell is not None and self._row is not None:
+            self._row.append(self._cell)
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+
+    def handle_data(self, data: str) -> None:
+        if self._first_body is not None:
+            self._first_body.append(data)
+        if self._depth != 1:
+            return
+        if self._header is not None:
+            self._header.append(data)
+        elif self._cell is not None:
+            self._cell.parts.append(data)
+
+
+@dataclass(frozen=True)
+class _CalendarPage:
+    meetings: list[tuple[date, dict[str, Any]]]
+    may_continue: bool
+    """True when the view may hold more meetings than this page shows."""
+    unread_links: int
+
+
+def _calendar_date(text: str) -> date:
+    match = _CALENDAR_DATE.match(text)
+    if not match:
+        raise SourceError("The Legistar calendar page has a meeting date in an unknown form")
+    month, day, year = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError as exc:
+        raise SourceError("The Legistar calendar page has an impossible meeting date") from exc
+
+
+def _calendar_link(client: str, cell: _Cell | None, path: str) -> tuple[str | None, int]:
+    """The cell's first link to path on the client's own site, and how many it refused."""
+    if cell is None:
+        return None, 0
+    host = f"{client}.legistar.com"
+    refused = 0
+    for href in cell.links:
+        url = urljoin(f"https://{host}/", href)
+        parts = urlsplit(url)
+        if parts.scheme == "https" and parts.netloc == host and parts.path == path:
+            return url, refused
+        if not href.startswith(("javascript:", "#")):
+            refused += 1
+    return None, refused
+
+
+def _parse_calendar(client: str, html: str, year: str, *, descending: bool) -> _CalendarPage:
+    grid = _CalendarGrid()
+    grid.feed(html)
+    grid.close()
+    if grid.year != year:
+        # The year arrives by cookie; a page that ignored it would show another span.
+        raise SourceError("The Legistar calendar page did not show the requested year")
+    if grid.body is None or grid.body != grid.first_body:
+        # So does the body; a page showing one body would pass for the whole calendar.
+        raise SourceError("The Legistar calendar page did not show every body")
+    column = {label: index for index, label in enumerate(grid.headers) if label}
+    if "Name" not in column or "Meeting Date" not in column:
+        raise SourceError("The Legistar calendar page has no Name or Meeting Date column")
+    meetings: list[tuple[date, dict[str, Any]]] = []
+    unread = 0
+    for cells in grid.rows:
+        if len(cells) != len(grid.headers):
+            raise SourceError("A Legistar calendar row does not match the page's columns")
+
+        def cell(label: str, cells: list[_Cell] = cells) -> _Cell | None:
+            return cells[column[label]] if label in column else None
+
+        day = _calendar_date(" ".join(cells[column["Meeting Date"]].lines()))
+        detail, refused_detail = _calendar_link(
+            client, cell("Meeting Details"), "/MeetingDetail.aspx"
+        )
+        agenda, refused_agenda = _calendar_link(client, cell("Agenda"), "/View.ashx")
+        minutes, refused_minutes = _calendar_link(client, cell("Minutes"), "/View.ashx")
+        unread += refused_detail + refused_agenda + refused_minutes
+        time_cell, place_cell = cell("Meeting Time"), cell("Meeting Location")
+        meetings.append(
+            (
+                day,
+                {
+                    "EventBodyName": " ".join(cells[column["Name"]].lines()) or None,
+                    "EventDate": day.isoformat(),
+                    "EventTime": " ".join(time_cell.lines()) or None if time_cell else None,
+                    "EventLocation": "; ".join(place_cell.lines()) or None if place_cell else None,
+                    "EventInSiteURL": detail,
+                    "EventAgendaFile": agenda,
+                    "EventMinutesFile": minutes,
+                },
+            )
+        )
+    days = [day for day, _ in meetings]
+    if days != sorted(days, reverse=descending):
+        # The order arrives by cookie too; the coverage reasoning depends on it.
+        raise SourceError("The Legistar calendar page did not sort meetings as requested")
+    return _CalendarPage(
+        meetings=meetings,
+        # A full page counts as possibly continued even when no pager row was found.
+        may_continue=grid.has_pager or len(meetings) >= CALENDAR_PAGE_ROWS,
+        unread_links=unread,
+    )
+
+
 class Legistar:
     """Read meetings, agenda items, votes, and legislation from the Legistar Web API."""
 
@@ -341,6 +640,7 @@ class Legistar:
     ) -> None:
         self._http = FixedHostClient(source_name=SOURCE_NAME, client=client)
         self._today = today
+        self._calendar_lock = asyncio.Lock()
         self._tokens: dict[str, str] = {}
         for name, token in (tokens or {}).items():
             if not _CLIENT.match(name) or not _TOKEN.match(token):
@@ -507,7 +807,14 @@ class Legistar:
         )
 
         async def run() -> Lookup:
-            records, public_url = await self._list(name, "events", params)
+            try:
+                records, public_url = await self._list(name, "events", params)
+            except SourceQueryError as error:
+                if error.code != "CLIENT_MISCONFIGURED":
+                    raise
+                return await self._calendar_meetings(
+                    name, first, last, body=body, count=count, api_error=error
+                )
             rows = []
             for record in records[:count]:
                 row = _project(record, MEETING_FIELDS)
@@ -544,6 +851,149 @@ class Legistar:
                 "limit": count,
             },
             run=run,
+        )
+
+    async def _calendar_meetings(
+        self,
+        client: str,
+        first: date,
+        last: date,
+        *,
+        body: str | None,
+        count: int,
+        api_error: SourceQueryError,
+    ) -> Lookup:
+        """Meetings from the client's public calendar page, for an API that cannot list them.
+
+        Each year is read newest first and, when that view does not reach back far enough,
+        oldest first. Dates neither view reached are named, and the result is then partial.
+        """
+        # The year menu lists each year to the current one, then Next Year; later dates
+        # go unread. The year comes from the server's clock, so near New Year a menu that
+        # has not turned over makes the page refuse the year and the API's error stands.
+        next_year = self._today().year + 1
+        years = [year for year in range(last.year, first.year - 1, -1) if year <= next_year]
+        if not years:
+            raise api_error
+        if len(years) > MAX_CALENDAR_YEARS:
+            raise _invalid(
+                "start_date",
+                f"The Legistar API for {client} cannot list meetings, so this tool reads its "
+                f"calendar page, at most {MAX_CALENDAR_YEARS} calendar years per request. "
+                "Give dates within two calendar years.",
+            )
+        page_url = f"https://{client}.legistar.com/Calendar.aspx"
+        wanted = " ".join(body.split()).casefold() if body is not None else None
+        found: dict[Any, tuple[date, dict[str, Any]]] = {}
+        gaps: list[tuple[date, date]] = []
+        if last.year > next_year:
+            gaps.append((date(next_year + 1, 1, 1), last))
+        views: list[str] = []
+        unread = 0
+        try:
+            # One calendar read at a time per server process keeps a no-login public
+            # instance from loading a city's site with parallel page requests.
+            async with asyncio.timeout(CALENDAR_TIMEOUT_SECONDS), self._calendar_lock:
+                prefix = await self._calendar_prefix(page_url)
+                for year in years:
+                    label = NEXT_YEAR if year == next_year else str(year)
+                    start = max(first, date(year, 1, 1))
+                    end = min(last, date(year, 12, 31))
+                    newest_first = await self._calendar_page(client, page_url, prefix, label, True)
+                    views.append(f"{label} newest first")
+                    pages = [newest_first]
+                    if newest_first.may_continue and newest_first.meetings:
+                        oldest = newest_first.meetings[-1][0]
+                        # Meetings on the oldest date shown may continue on the next page.
+                        if oldest >= start:
+                            oldest_first = await self._calendar_page(
+                                client, page_url, prefix, label, False
+                            )
+                            views.append(f"{label} oldest first")
+                            pages.append(oldest_first)
+                            if oldest_first.may_continue and oldest_first.meetings:
+                                newest = oldest_first.meetings[-1][0]
+                                gap = (max(start, newest), min(end, oldest))
+                                if newest <= oldest and gap[0] <= gap[1]:
+                                    gaps.append(gap)
+                    for page in pages:
+                        unread += page.unread_links
+                        for day, row in page.meetings:
+                            body_name = str(row["EventBodyName"] or "").casefold()
+                            if not start <= day <= end or (wanted and wanted not in body_name):
+                                continue
+                            key = row["EventInSiteURL"] or tuple(row.values())
+                            found.setdefault(key, (day, row))
+        except (SourceError, TimeoutError) as error:
+            raise api_error from error
+        gaps.sort()
+        ordered = sorted(found.values(), key=lambda pair: pair[0], reverse=True)
+        rows = [row for _, row in ordered[:count]]
+        result = SourceQueryResult(
+            dataset_id=f"{client}/calendar",
+            dataset_name=f"Legistar website calendar, client {client}",
+            domain=f"{client}.legistar.com",
+            source_url=page_url,
+            query=f"Calendar.aspx year views: {', '.join(views)}",
+            query_url=page_url,
+            rows=rows,
+            returned_row_count=len(rows),
+            completeness=(
+                Completeness.TRUNCATED if gaps or len(ordered) > count else Completeness.COMPLETE
+            ),
+            schema_sha256=_schema_hash("calendar", CALENDAR_FIELDS),
+        )
+        warnings = [
+            calendar_warning(client),
+            CALENDAR_MINUTES_WARNING,
+            PUBLIC_ONLY_WARNING,
+            CALENDAR_PAGE_WARNING,
+        ]
+        rules = [calendar_rule(client)]
+        escalations = ["LEGISTAR_WEB_CALENDAR"]
+        if gaps:
+            warnings.insert(0, calendar_gap_warning(gaps))
+            rules.insert(0, calendar_gap_rule(gaps))
+            escalations.append("LEGISTAR_CALENDAR_GAP")
+        if unread:
+            warnings.append(UNREAD_LINK_WARNING)
+        return Lookup(
+            result=result,
+            row_grain=CALENDAR_GRAIN,
+            warnings=warnings,
+            rules=rules,
+            escalations=escalations,
+        )
+
+    async def _calendar_prefix(self, page_url: str) -> str:
+        """The site's settings number, which its calendar cookies carry in their names."""
+        status, headers, _ = await self._http.send_with_headers(
+            "GET", page_url, headers={"Accept": "text/html"}
+        )
+        if status != 200:
+            raise SourceError(f"The Legistar calendar page answered HTTP {status}")
+        for value in headers.get_list("set-cookie"):
+            match = _SETTING_PREFIX.match(value)
+            if match:
+                return match.group(1)
+        raise SourceError("The Legistar calendar page set no calendar cookie")
+
+    async def _calendar_page(
+        self, client: str, page_url: str, prefix: str, year: str, descending: bool
+    ) -> _CalendarPage:
+        order = "DESC" if descending else "ASC"
+        cookie = (
+            f"Setting-{prefix}-Calendar Year={year}; Setting-{prefix}-Calendar Body=All; "
+            f"Setting-{prefix}-ASP.calendar_aspx.gridCalendar.SortExpression="
+            f"MeetingStartDate {order}"
+        )
+        status, content = await self._http.send(
+            "GET", page_url, headers={"Accept": "text/html", "Cookie": cookie}
+        )
+        if status != 200:
+            raise SourceError(f"The Legistar calendar page answered HTTP {status}")
+        return _parse_calendar(
+            client, content.decode("utf-8", "replace"), year, descending=descending
         )
 
     def get_meeting_items(self, *, client: str, event_id: int) -> PreparedLookup:

@@ -593,8 +593,9 @@ async def test_a_client_side_setting_error_is_named() -> None:
     )
 
     with pytest.raises(SourceQueryError) as caught:
+        # The site answers the calendar page the same way, so the API's error stands.
         await legistar.find_meetings(
-            client="sfgov", start_date="2025-11-01", end_date="2025-11-30"
+            client="sfgov", start_date="2024-11-01", end_date="2024-11-30"
         ).run()
 
     assert caught.value.code == "CLIENT_MISCONFIGURED"
@@ -675,3 +676,471 @@ async def test_a_tokened_legislation_search_never_cites_the_token() -> None:
     assert len(requests) == 2
     assert TOKEN not in repr(found)
     assert found.escalations == ["LEGISTAR_API_STALE"]
+
+
+# The calendar markup below follows sfgov.legistar.com/Calendar.aspx as served on
+# 2026-11-22, trimmed to the grid, its pager, and the year menu's input.
+CAL_GUID = "9E7FA469-A378-4F34-B5AD-03FD15F32EDD"
+CAL_HEADERS = (
+    "Name",
+    "Meeting Date",
+    "&nbsp;",
+    "Meeting Time",
+    "Meeting Location",
+    "Meeting Details",
+    "Agenda",
+    "Minutes",
+    "Video",
+)
+SETTING_REASON = (
+    "'Agenda Draft Status' or 'Agenda Status Not Vievable By The Public' is not setup in "
+    "settings. Value should be greater than 0."
+)
+
+
+def calendar_row(
+    body: str, day: str, meeting_id: int, *, minutes: bool = True, agenda: str | None = None
+) -> str:
+    agenda_href = agenda or f"View.ashx?M=A&amp;ID={meeting_id}&amp;GUID={CAL_GUID}"
+    minutes_cell = (
+        f'<a href="View.ashx?M=M&amp;ID={meeting_id}&amp;GUID={CAL_GUID}">Minutes</a>'
+        if minutes
+        else '<a class="otherNotAvaiableMinutes"><font>Not&nbsp;available</font></a>'
+    )
+    return (
+        f'<tr class="rgRow"><td><font><a><font>{body}</font></a></font></td>'
+        f'<td class="rgSorted"><font>{day}</font></td>'
+        f'<td><a href="View.ashx?M=IC&amp;ID={meeting_id}&amp;GUID={CAL_GUID}">'
+        '<img alt="Export to iCalendar" /></a></td>'
+        "<td><span><font>10:00 AM</font></span></td>"
+        "<td><font>City Hall, Room 250<br /><em>Regular Meeting</em></font></td>"
+        f'<td><a href="MeetingDetail.aspx?ID={meeting_id}&amp;GUID={CAL_GUID}'
+        '&amp;Options=info|&amp;Search=">Meeting&nbsp;details</a></td>'
+        f'<td><img alt="Agenda" /> <a href="{agenda_href}">Agenda</a></td>'
+        f"<td>{minutes_cell}</td>"
+        '<td><a class="videolink">Not&nbsp;available</a></td></tr>'
+    )
+
+
+def calendar_html(
+    year: str, rows: list[str], *, pager: bool = False, body: str = "All Bodies"
+) -> str:
+    header = "".join(f'<th scope="col" class="rgHeader">{label}</th>' for label in CAL_HEADERS)
+    pager_row = (
+        '<tr class="rgPager"><td colspan="9"><table><tbody><tr><td class="rgPagerCell">'
+        '<div class="rgWrap rgInfoPart">Page 1 of 2, items 1 to 100 of 181.</div>'
+        "</td></tr></tbody></table></td></tr>"
+        if pager
+        else ""
+    )
+    return (
+        f'<html><body><input id="ctl00_ContentPlaceHolder1_lstYears_Input" value="{year}" />'
+        f'<input id="ctl00_ContentPlaceHolder1_lstBodies_Input" value="{body}" />'
+        '<div class="rcbSlide"><div id="ctl00_ContentPlaceHolder1_lstBodies_DropDown">'
+        '<div class="rcbScroll"><ul class="rcbList"><li class="rcbItem">All Bodies</li>'
+        '<li class="rcbItem">Board</li></ul></div></div></div>'
+        '<table class="rgMasterTable" id="ctl00_ContentPlaceHolder1_gridCalendar_ctl00">'
+        f"<thead>{pager_row}<tr>{header}</tr></thead><tbody>{''.join(rows)}</tbody>"
+        f"<tfoot>{pager_row}</tfoot></table></body></html>"
+    )
+
+
+def calendar_site(
+    pages: dict[tuple[str, str], str],
+    *,
+    first_page: httpx.Response | None = None,
+    api: httpx.Response | None = None,
+) -> tuple[Legistar, list[httpx.Request]]:
+    """A Legistar whose events API names a client setting error and whose site serves pages."""
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.host == LEGISTAR_HOST:
+            return api or httpx.Response(
+                400, text=SETTING_REASON, headers={"Content-Type": "text/plain"}
+            )
+        assert request.url.host == "sfgov.legistar.com"
+        assert request.url.path == "/Calendar.aspx"
+        cookie = request.headers.get("cookie")
+        if cookie is None:
+            return first_page or httpx.Response(
+                200,
+                text="<html></html>",
+                headers=[
+                    ("Set-Cookie", "ASP.NET_SessionId=abc; path=/; secure; HttpOnly"),
+                    ("Set-Cookie", "Setting-60-Calendar Options=info|; path=/; secure"),
+                    ("Set-Cookie", "Setting-60-Calendar Year=This Month; path=/; secure"),
+                ],
+            )
+        year = cookie.split("Calendar Year=")[1].split(";")[0]
+        order = "DESC" if "MeetingStartDate DESC" in cookie else "ASC"
+        page = pages[(year, order)]
+        return httpx.Response(503, text="busy") if page == "503" else httpx.Response(200, text=page)
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return route(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return Legistar(client=client, today=lambda: date(2026, 11, 21)), requests
+
+
+def page_requests(requests: list[httpx.Request]) -> list[str]:
+    return [r.headers["cookie"] for r in requests if "cookie" in r.headers]
+
+
+@pytest.mark.asyncio
+async def test_a_misconfigured_events_api_falls_back_to_the_calendar_page() -> None:
+    page = calendar_html(
+        "2026",
+        [
+            calendar_row("Audit and Oversight Committee", "11/19/2026", 3, minutes=False),
+            calendar_row("Board of Supervisors", "11/17/2026", 2),
+            calendar_row("Rules Committee", "10/1/2026", 1),
+        ],
+    )
+    legistar, requests = calendar_site({("2026", "DESC"): page})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-11-01", end_date="2026-11-30"
+    ).run()
+
+    rows = found.result.rows
+    assert [row["EventDate"] for row in rows] == ["2026-11-19", "2026-11-17"]
+    assert all(tuple(row) == legistar_module.CALENDAR_FIELDS for row in rows)
+    assert rows[0]["EventMinutesFile"] is None
+    assert rows[1]["EventAgendaFile"] == (
+        f"https://sfgov.legistar.com/View.ashx?M=A&ID=2&GUID={CAL_GUID}"
+    )
+    assert rows[1]["EventInSiteURL"].startswith(
+        f"https://sfgov.legistar.com/MeetingDetail.aspx?ID=2&GUID={CAL_GUID}"
+    )
+    assert rows[1]["EventLocation"] == "City Hall, Room 250; Regular Meeting"
+    assert rows[1]["EventTime"] == "10:00 AM"
+    assert found.result.completeness is Completeness.COMPLETE
+    assert found.result.domain == "sfgov.legistar.com"
+    assert found.result.query_url == "https://sfgov.legistar.com/Calendar.aspx"
+    assert found.escalations == ["LEGISTAR_WEB_CALENDAR"]
+    assert found.warnings[0] == legistar_module.calendar_warning("sfgov")
+    assert {r.url.host for r in requests} == {LEGISTAR_HOST, "sfgov.legistar.com"}
+    # The cookies the site set on the first answer never replace the ones asked for.
+    assert page_requests(requests) == [
+        "Setting-60-Calendar Year=2026; Setting-60-Calendar Body=All; "
+        "Setting-60-ASP.calendar_aspx.gridCalendar.SortExpression=MeetingStartDate DESC"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_older_range_also_reads_the_oldest_first_view() -> None:
+    newest = calendar_html(
+        "2026",
+        [calendar_row("Board", "11/19/2026", 9), calendar_row("Board", "5/13/2026", 8)],
+        pager=True,
+    )
+    oldest = calendar_html(
+        "2026",
+        [
+            calendar_row("Board", "1/5/2026", 1),
+            calendar_row("Board", "3/10/2026", 2),
+            calendar_row("Board", "6/11/2026", 3),
+        ],
+        pager=True,
+    )
+    legistar, requests = calendar_site({("2026", "DESC"): newest, ("2026", "ASC"): oldest})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-03-01", end_date="2026-03-31"
+    ).run()
+
+    assert [row["EventDate"] for row in found.result.rows] == ["2026-03-10"]
+    assert found.result.completeness is Completeness.COMPLETE
+    assert [cookie[-4:] for cookie in page_requests(requests)] == ["DESC", " ASC"]
+
+
+@pytest.mark.asyncio
+async def test_a_recent_range_reads_only_the_newest_first_view() -> None:
+    newest = calendar_html(
+        "2026",
+        [calendar_row("Board", "11/19/2026", 9), calendar_row("Board", "5/13/2026", 8)],
+        pager=True,
+    )
+    legistar, requests = calendar_site({("2026", "DESC"): newest})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-06-01", end_date="2026-11-30"
+    ).run()
+
+    assert found.result.returned_row_count == 1
+    assert found.result.completeness is Completeness.COMPLETE
+    assert len(page_requests(requests)) == 1
+
+
+@pytest.mark.asyncio
+async def test_dates_neither_view_reaches_are_named_and_partial() -> None:
+    newest = calendar_html(
+        "2026",
+        [calendar_row("Board", "11/19/2026", 9), calendar_row("Board", "9/1/2026", 8)],
+        pager=True,
+    )
+    oldest = calendar_html(
+        "2026",
+        [calendar_row("Board", "1/5/2026", 1), calendar_row("Board", "4/30/2026", 2)],
+        pager=True,
+    )
+    legistar, _ = calendar_site({("2026", "DESC"): newest, ("2026", "ASC"): oldest})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-04-01", end_date="2026-10-31"
+    ).run()
+
+    assert [row["EventDate"] for row in found.result.rows] == ["2026-09-01", "2026-04-30"]
+    assert found.result.completeness is Completeness.TRUNCATED
+    assert found.escalations == ["LEGISTAR_WEB_CALENDAR", "LEGISTAR_CALENDAR_GAP"]
+    assert "2026-04-30 to 2026-09-01" in found.warnings[0]
+    assert "2026-04-30 to 2026-09-01" in found.rules[0]
+
+
+@pytest.mark.asyncio
+async def test_two_calendar_years_and_next_year_are_read() -> None:
+    pages = {
+        ("2026", "DESC"): calendar_html("2026", [calendar_row("Board", "1/6/2026", 2)]),
+        ("2025", "DESC"): calendar_html("2025", [calendar_row("Board", "12/16/2025", 1)]),
+        ("Next Year", "DESC"): calendar_html("Next Year", [calendar_row("Board", "1/12/2027", 3)]),
+    }
+    legistar, requests = calendar_site(pages)
+
+    across = await legistar.find_meetings(
+        client="sfgov", start_date="2025-12-01", end_date="2026-01-31"
+    ).run()
+    ahead = await legistar.find_meetings(
+        client="sfgov", start_date="2026-12-01", end_date="2027-01-31"
+    ).run()
+
+    assert [row["EventDate"] for row in across.result.rows] == ["2026-01-06", "2025-12-16"]
+    assert across.result.completeness is Completeness.COMPLETE
+    assert [row["EventDate"] for row in ahead.result.rows] == ["2027-01-12"]
+    assert ahead.result.completeness is Completeness.COMPLETE
+    # Each call learns the settings number afresh, with no cookie from the call before.
+    assert len(page_requests(requests)) == 4
+
+
+@pytest.mark.asyncio
+async def test_years_past_next_year_are_named_or_leave_the_api_error() -> None:
+    pages = {("Next Year", "DESC"): calendar_html("Next Year", [])}
+    legistar, requests = calendar_site(pages)
+
+    partly = await legistar.find_meetings(
+        client="sfgov", start_date="2027-12-01", end_date="2028-01-31"
+    ).run()
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2028-01-01", end_date="2028-01-31"
+        ).run()
+
+    assert partly.result.completeness is Completeness.TRUNCATED
+    assert "2028-01-01 to 2028-01-31" in partly.warnings[0]
+    assert caught.value.code == "CLIENT_MISCONFIGURED"
+    assert len(page_requests(requests)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_full_page_without_a_pager_still_reads_the_oldest_first_view() -> None:
+    rows = [
+        calendar_row("Board", f"{12 - n // 10}/{28 - n % 10}/2026", 1000 - n)
+        for n in range(legistar_module.CALENDAR_PAGE_ROWS)
+    ]
+    oldest = calendar_html("2026", [calendar_row("Board", "1/5/2026", 1)])
+    legistar, requests = calendar_site(
+        {("2026", "DESC"): calendar_html("2026", rows), ("2026", "ASC"): oldest}
+    )
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-01-01", end_date="2026-12-31", limit=200
+    ).run()
+
+    assert len(page_requests(requests)) == 2
+    assert found.result.returned_row_count == legistar_module.CALENDAR_PAGE_ROWS + 1
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_in_both_views_is_listed_once_and_a_one_day_gap_is_named() -> None:
+    newest = calendar_html(
+        "2026",
+        [calendar_row("Board", "11/19/2026", 9), calendar_row("Board", "6/1/2026", 5)],
+        pager=True,
+    )
+    oldest = calendar_html(
+        "2026",
+        [calendar_row("Board", "1/5/2026", 1), calendar_row("Board", "6/1/2026", 5)],
+        pager=True,
+    )
+    legistar, requests = calendar_site({("2026", "DESC"): newest, ("2026", "ASC"): oldest})
+
+    # The range starts on the oldest date the newest-first view shows.
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-06-01", end_date="2026-07-01"
+    ).run()
+
+    assert [row["EventDate"] for row in found.result.rows] == ["2026-06-01"]
+    assert found.result.completeness is Completeness.TRUNCATED
+    assert "2026-06-01 to 2026-06-01" in found.warnings[0]
+    assert len(page_requests(requests)) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_slow_calendar_gives_back_the_api_error_within_its_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(legistar_module, "CALENDAR_TIMEOUT_SECONDS", 0.05)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == LEGISTAR_HOST:
+            return httpx.Response(400, text=SETTING_REASON)
+        await asyncio.sleep(1)
+        return httpx.Response(200, text="<html></html>")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    legistar = Legistar(client=client, today=lambda: date(2026, 11, 21))
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2026-11-01", end_date="2026-11-30"
+        ).run()
+
+    assert caught.value.code == "CLIENT_MISCONFIGURED"
+
+
+@pytest.mark.asyncio
+async def test_more_than_two_calendar_years_is_refused_before_the_site_is_read() -> None:
+    legistar, requests = calendar_site({})
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2024-01-01", end_date="2026-11-30"
+        ).run()
+
+    assert caught.value.code == "INVALID_QUERY_ARGUMENT"
+    assert caught.value.argument == "start_date"
+    assert {r.url.host for r in requests} == {LEGISTAR_HOST}
+
+
+@pytest.mark.asyncio
+async def test_body_words_filter_the_calendar_and_the_limit_truncates() -> None:
+    page = calendar_html(
+        "2026",
+        [
+            calendar_row("Board of Supervisors", "11/17/2026", 3),
+            calendar_row("Rules Committee", "11/16/2026", 2),
+            calendar_row("Board of Supervisors", "11/10/2026", 1),
+        ],
+    )
+    legistar, _ = calendar_site({("2026", "DESC"): page})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-11-01", end_date="2026-11-30", body="BOARD", limit=1
+    ).run()
+
+    assert [row["EventDate"] for row in found.result.rows] == ["2026-11-17"]
+    assert found.result.completeness is Completeness.TRUNCATED
+
+
+@pytest.mark.asyncio
+async def test_a_calendar_link_to_another_host_is_left_out_and_named() -> None:
+    page = calendar_html(
+        "2026",
+        [calendar_row("Board", "11/17/2026", 1, agenda="https://example.org/agenda.pdf")],
+    )
+    legistar, _ = calendar_site({("2026", "DESC"): page})
+
+    found = await legistar.find_meetings(
+        client="sfgov", start_date="2026-11-01", end_date="2026-11-30"
+    ).run()
+
+    assert found.result.rows[0]["EventAgendaFile"] is None
+    assert legistar_module.UNREAD_LINK_WARNING in found.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pages", "first_page"),
+    [
+        # The page ignored the year cookie and showed its default span.
+        ({("2026", "DESC"): calendar_html("This Month", [])}, None),
+        # The page ignored the order cookie.
+        (
+            {
+                ("2026", "DESC"): calendar_html(
+                    "2026",
+                    [calendar_row("Board", "11/1/2026", 1), calendar_row("Board", "11/9/2026", 2)],
+                )
+            },
+            None,
+        ),
+        # The page showed one body instead of the whole calendar.
+        (
+            {
+                ("2026", "DESC"): calendar_html(
+                    "2026", [calendar_row("Board", "11/9/2026", 1)], body="Board"
+                )
+            },
+            None,
+        ),
+        # A row was never closed, so the next one would swallow it.
+        (
+            {
+                ("2026", "DESC"): calendar_html(
+                    "2026",
+                    [
+                        calendar_row("Board", "11/9/2026", 2).removesuffix("</tr>"),
+                        calendar_row("Board", "11/2/2026", 1),
+                    ],
+                )
+            },
+            None,
+        ),
+        # The oldest-first view failed after the newest-first view was read.
+        (
+            {
+                ("2026", "DESC"): calendar_html(
+                    "2026",
+                    [calendar_row("Board", "11/19/2026", 2), calendar_row("Board", "11/2/2026", 1)],
+                    pager=True,
+                ),
+                ("2026", "ASC"): "503",
+            },
+            None,
+        ),
+        # The site set no calendar cookie to learn its settings number from.
+        ({}, httpx.Response(200, text="<html></html>")),
+        ({}, httpx.Response(503, text="busy")),
+    ],
+)
+async def test_an_unreadable_calendar_leaves_the_api_error(
+    pages: dict[tuple[str, str], str], first_page: httpx.Response | None
+) -> None:
+    legistar, _ = calendar_site(pages, first_page=first_page)
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2026-11-01", end_date="2026-11-30"
+        ).run()
+
+    assert caught.value.code == "CLIENT_MISCONFIGURED"
+    assert SETTING_REASON in caught.value.public_message
+
+
+@pytest.mark.asyncio
+async def test_other_api_errors_never_reach_the_website() -> None:
+    unknown = httpx.Response(
+        500, json={"ExceptionMessage": "LegistarConnectionString setting is not set up"}
+    )
+    legistar, requests = calendar_site({}, api=unknown)
+
+    with pytest.raises(SourceQueryError) as caught:
+        await legistar.find_meetings(
+            client="sfgov", start_date="2026-11-01", end_date="2026-11-30"
+        ).run()
+
+    assert caught.value.code == "UNKNOWN_CLIENT"
+    assert {r.url.host for r in requests} == {LEGISTAR_HOST}
