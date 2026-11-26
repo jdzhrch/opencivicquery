@@ -525,8 +525,16 @@ def newest_matter_request(request: httpx.Request) -> bool:
     return request.url.params.get("$select") == "MatterIntroDate"
 
 
+def api_requests(requests: list[httpx.Request]) -> list[httpx.Request]:
+    return [request for request in requests if request.url.host == LEGISTAR_HOST]
+
+
 def stale_route(newest: httpx.Response) -> Callable[[httpx.Request], httpx.Response]:
+    """An API with the given newest matter, beside a website that cannot be read."""
+
     def route(request: httpx.Request) -> httpx.Response:
+        if request.url.host != LEGISTAR_HOST:
+            return httpx.Response(503, text="busy")
         if newest_matter_request(request):
             return newest
         return httpx.Response(200, json=[MATTER])
@@ -544,7 +552,10 @@ async def test_an_api_copy_that_stopped_updating_escalates() -> None:
     found = await legistar.search_legislation(client="sfgov", text="Mission Street").run()
 
     (newest,) = [request for request in requests if newest_matter_request(request)]
-    assert len(requests) == 2
+    assert len(api_requests(requests)) == 2
+    # The website could not be read, so the API's older copy stands under its warning.
+    (site,) = [request for request in requests if request.url.host != LEGISTAR_HOST]
+    assert str(site.url) == "https://sfgov.legistar.com/Legislation.aspx"
     assert dict(newest.url.params) == {
         "$filter": "MatterIntroDate lt datetime'2024-12-02'",
         "$top": "1",
@@ -672,8 +683,12 @@ async def test_a_tokened_legislation_search_never_cites_the_token() -> None:
 
     found = await legistar.search_legislation(client="nyc", text="rent").run()
 
-    assert all(request.url.params["token"] == TOKEN for request in requests)
-    assert len(requests) == 2
+    assert all(request.url.params["token"] == TOKEN for request in api_requests(requests))
+    assert len(api_requests(requests)) == 2
+    # The token belongs to the API alone; the jurisdiction's website never receives it.
+    (site,) = [request for request in requests if request.url.host != LEGISTAR_HOST]
+    assert site.url.host == "nyc.legistar.com"
+    assert TOKEN not in str(site.url) and TOKEN not in repr(site.headers)
     assert TOKEN not in repr(found)
     assert found.escalations == ["LEGISTAR_API_STALE"]
 
@@ -816,6 +831,8 @@ async def test_a_misconfigured_events_api_falls_back_to_the_calendar_page() -> N
     assert rows[1]["EventInSiteURL"].startswith(
         f"https://sfgov.legistar.com/MeetingDetail.aspx?ID=2&GUID={CAL_GUID}"
     )
+    # The page's own link gives the ID and GUID that the meeting page needs.
+    assert (rows[1]["EventId"], rows[1]["EventGuid"]) == (2, CAL_GUID)
     assert rows[1]["EventLocation"] == "City Hall, Room 250; Regular Meeting"
     assert rows[1]["EventTime"] == "10:00 AM"
     assert found.result.completeness is Completeness.COMPLETE

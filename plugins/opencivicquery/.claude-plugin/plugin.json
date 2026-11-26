@@ -1,7 +1,7 @@
 {
   "name": "opencivicquery",
   "displayName": "OpenCivicQuery",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Ask questions of government open data on every Socrata portal, city and county meeting records from Legistar, Census data and addresses, federal awards, SEC filings, and federal court opinions, and search court records through CourtListener, with evidence a reporter can cite.",
   "author": {
     "name": "Rongcheng Zhang"

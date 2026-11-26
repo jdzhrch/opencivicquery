@@ -110,6 +110,8 @@ def test_skill_mentions_only_tools_the_server_offers() -> None:
         "presentation_rules",
         "source_url",
         "query_url",
+        "event_id",
+        "event_guid",
     }
 
     assert tools == {

@@ -4,10 +4,11 @@ Most Legistar clients answer without a key. Every request goes to one fixed host
 caller names only a client, which is checked against a strict pattern before it becomes
 a path segment.
 
-When a client's API refuses to list meetings because of a setting on the jurisdiction's
-side, find_meetings reads the same client's public calendar page instead. That page lives
-at <client>.legistar.com, a host the Web API has just confirmed by naming the client's
-own setting error.
+When a client's API refuses a request because of a setting on the jurisdiction's side, or
+its copy of the legislation has stopped updating, the tools read the same client's public
+pages instead: the calendar, the legislation search, and the pages of one matter, one
+meeting, and one action. Those pages live at <client>.legistar.com, a host the Web API has
+just confirmed by answering for that client. legistar_pages.py holds the page parsing.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from html.parser import HTMLParser
@@ -27,6 +29,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 import httpx
 
 from opencivicquery.models import Completeness, SourceQueryResult
+from opencivicquery.sources import legistar_pages as pages
 from opencivicquery.sources.base import Lookup, PreparedLookup, SourceError, SourceQueryError
 from opencivicquery.sources.http import FixedHostClient
 
@@ -92,6 +95,18 @@ _CALENDAR_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
 # pager reading "Page 1 of 2, items 1 to 100 of 181"; "MeetingStartDate ASC" returned the
 # oldest 100, 2026-01-05 to 2026-06-11, and the newest 100 ran from 2026-05-13 to
 # 2026-11-19. The site sent no robots.txt and the page links no terms of use.
+
+PAGE_TIMEOUT_SECONDS = 25.0
+CALL_BUDGET_SECONDS = 50.0
+# Page reading follows one or two API requests, each with its own timeout. The call
+# budget ends page reading before the service's 60-second deadline even when those ran
+# long, so a finished API answer or a clear error is what the caller gets.
+MAX_DETAIL_PAGES = 10
+# checked 2026-11-26: a sfgov legislation search answered in 0.4 to 1.0 seconds with 370
+# to 620 KB, a matter page in 0.3 seconds with 109 KB, a Board meeting page of 88 items in
+# 0.8 seconds with 541 KB, and an action page in 0.3 seconds with 56 KB. A search costs
+# three or four requests before any matter page, so ten matter pages keep one call near
+# fourteen requests. The site sent no robots.txt.
 
 MEETING_FIELDS = (
     "EventId",
@@ -259,6 +274,8 @@ VOTE_RULE = (
 )
 
 CALENDAR_FIELDS = (
+    "EventId",
+    "EventGuid",
     "EventBodyName",
     "EventDate",
     "EventTime",
@@ -278,9 +295,9 @@ def calendar_warning(client: str) -> str:
         f"The Legistar API for {client} cannot list meetings because of a setting on the "
         f"jurisdiction's side, so these meetings come from its public calendar page, "
         f"https://{client}.legistar.com/Calendar.aspx. The page gives each meeting's agenda "
-        "and minutes files but no agenda items or member votes, and get_meeting_items and "
-        "get_item_votes cannot read this client's meetings. Take items, actions, and votes "
-        "from the agenda and minutes files."
+        "and minutes files. For a meeting's agenda items and member votes, pass its EventId "
+        "as event_id and its EventGuid as event_guid to get_meeting_items and "
+        "get_item_votes, which read the meeting's own page."
     )
 
 
@@ -288,8 +305,7 @@ def calendar_rule(client: str) -> str:
     return (
         f"WEBSITE CALENDAR. Say that these meetings come from the Legistar calendar page of "
         f"{client} because its API cannot list meetings. Cite each meeting by its "
-        "EventInSiteURL, and take agenda items, actions, and votes only from the agenda and "
-        "minutes files."
+        "EventInSiteURL."
     )
 
 
@@ -329,6 +345,240 @@ def calendar_gap_rule(gaps: list[tuple[date, date]]) -> str:
         f"PARTIAL CALENDAR. Say that meetings from {spans} were not read, and never report "
         "that no meeting took place then."
     )
+
+
+WEB_MATTER_FIELDS = (
+    "MatterId",
+    "MatterFile",
+    "MatterVersion",
+    "MatterName",
+    "MatterTitle",
+    "MatterTypeName",
+    "MatterStatusName",
+    "MatterBodyName",
+    "MatterIntroDate",
+    "MatterAgendaDate",
+    "MatterPassedDate",
+    "MatterEnactmentDate",
+    "MatterEnactmentNumber",
+    "Sponsors",
+    "History",
+    "DetailPageRead",
+    "LegislationDetailURL",
+)
+WEB_ITEM_FIELDS = (
+    "EventItemId",
+    "EventItemAgendaNumber",
+    "EventItemMatterFile",
+    "EventItemVersion",
+    "EventItemMatterName",
+    "EventItemMatterType",
+    "EventItemMatterStatus",
+    "EventItemTitle",
+    "EventItemActionName",
+    "EventItemPassedFlagName",
+    "EventItemMatterId",
+    "LegislationDetailURL",
+    "ActionDetailURL",
+)
+WEB_VOTE_FIELDS = ("VotePersonName", "VoteValueName")
+# checked 2026-11-26: the sfgov search grid sorts its File #, Introduced, and Final Action
+# columns on MatterLegacyFile, MatterIntroDate, and MatterPassedDate, and the matter page
+# labels its fields File #, Version, Name, Type, Status, Introduced, In control, On agenda,
+# Final action, Enactment date, Enactment #, Title, and Sponsors. The rows keep the API's
+# names for those.
+
+WEB_MATTER_GRAIN = (
+    "One Legistar matter, as a row of the jurisdiction's public legislation search page. "
+    "Where DetailPageRead is true, the matter's own page filled in its sponsors and other "
+    "details."
+)
+WEB_ITEM_GRAIN = (
+    "One action the clerk recorded on one legislative file at one meeting, as a row of the "
+    "meeting's public Legistar page. A file with two actions at the meeting fills two rows."
+)
+# checked 2026-11-26: the sfgov Rules Committee meeting of 2026-09-14 listed 7 rows for 5
+# files; files 260862 and 260705 each had one row per version and action.
+WEB_VOTE_GRAIN = (
+    "One member's recorded vote on one action, as a row of the action's public Legistar page."
+)
+
+SETTING_REASON = "cannot answer this request because of a setting on the jurisdiction's side"
+
+
+def stale_reason(newest: date) -> str:
+    return f"holds no matter introduced after {newest.isoformat()}"
+
+
+def web_warning(client: str, reason: str) -> str:
+    return (
+        f"The Legistar API copy for {client} {reason}, so this answer comes from the "
+        f"jurisdiction's public Legistar pages at https://{client}.legistar.com. The clerk's "
+        "office can change these pages after this retrieval."
+    )
+
+
+def web_rule(client: str, reason: str) -> str:
+    return (
+        f"WEBSITE PAGES. Say that this comes from the public Legistar pages of {client} "
+        f"because its API copy {reason}. Cite each matter by its LegislationDetailURL, each "
+        "action by its ActionDetailURL, and each meeting by its meeting page."
+    )
+
+
+WEB_SEARCH_WARNING = (
+    "How the page's search matches text is not documented. On 2026-11-26 San Francisco's "
+    "page matched whole words of a matter's full title, and matched a file or enactment "
+    "number anywhere inside it. This tool searches the title and, when the text holds a "
+    "digit, the file or enactment number too. Read each title before counting it as "
+    "relevant, and say the count is of matters the page's search returned."
+)
+# checked 2026-11-26: a sfgov title search for 'rent' over matters introduced 2026-11-01
+# to 2026-11-26 returned 4 matters and none through a longer word such as 'current'; a
+# search for 'housing' also returned titles that hold 'Housing'. A File/enactment # search
+# for 260875 set the cookie "Search-File=%260875%" and returned that one file.
+
+WEB_TITLE_CUT_WARNING = (
+    "The search page cuts a title at about 600 characters, so a word the search matched can "
+    "sit in the part that is cut. MatterTitle is the full title only where DetailPageRead is "
+    "true."
+)
+# checked 2026-11-26: 3 of 22 sfgov matches for 'housing' showed titles of about 600
+# characters without the word.
+
+WEB_SEARCH_LINK_WARNING = (
+    "query_url opens the search form, which shows no result until the criteria in query are "
+    "entered under Advanced search."
+)
+
+WEB_ITEM_ROWS_WARNING = (
+    "Each row is one action the clerk recorded on one file, so a file with two actions "
+    "fills two rows. An empty action or result does not show that nothing happened: many "
+    "items are only scheduled or heard. Call get_item_votes with the same event_guid for "
+    "any row with a result, and check the minutes file."
+)
+WEB_ITEMS_WARNING = (
+    "The meeting page says it shows legislation only. Procedural items such as roll call "
+    f"and public comment are in the agenda file. {WEB_ITEM_ROWS_WARNING}"
+)
+
+
+def items_view_warning(view: str | None) -> str:
+    """What the list leaves out, as far as the page's own view label says."""
+    if view == pages.LEGISLATION_VIEW:
+        return WEB_ITEMS_WARNING
+    shown = f"reads {view}" if view else "is not stated"
+    return (
+        f"The meeting page's view {shown}, so this tool cannot say which agenda items the "
+        f"list leaves out. Check the agenda file. {WEB_ITEM_ROWS_WARNING}"
+    )
+
+
+WEB_ITEM_COUNT_RULE = (
+    "Count files by distinct EventItemMatterFile, and say so when a figure counts recorded "
+    "actions instead."
+)
+# checked 2026-11-26: the sfgov meeting page's view menu read "Show: Legislation only",
+# with "All agenda items" as its other choice. The Rules Committee meeting of 2026-09-14
+# listed 7 records and the Board meeting of 2026-09-29 listed 88 on one page without a
+# pager; 35 of the 88 had no action and no result.
+
+WEB_MINUTES_RULE = (
+    "Give the meeting's minutes status, which dataset_name states, beside any action or "
+    "vote you report."
+)
+
+PARTIAL_PAGE_WARNING = (
+    "The page showed only part of this list, and this tool read the part it showed. Open "
+    "query_url for the rest."
+)
+
+
+def detail_warning(read: int, listed: int) -> str:
+    return (
+        "Sponsors, MatterName, MatterBodyName, MatterAgendaDate, and the enactment fields "
+        f"come from each matter's own page. This call read that page for {read} of the "
+        f"{listed} matters listed, marked DetailPageRead true. For the others these fields "
+        "are empty because their pages were not read. Search for one file number to read "
+        "that matter's page and its action history."
+    )
+
+
+DETAIL_RULE = (
+    "UNREAD MATTER PAGES. Where DetailPageRead is false, say the sponsors were not read, "
+    "and never say the matter has no sponsor."
+)
+WEB_SPONSOR_RULE = (
+    "Sponsors holds the names on the matter's own page. Where DetailPageRead is true and "
+    "Sponsors is empty or null, say that the matter's page names no sponsor."
+)
+SITE_UNREAD_WARNING = (
+    "This server tried to read the jurisdiction's current Legistar pages and could not just "
+    "now, so this answer is the API's older copy. Try again in a minute for current matters."
+)
+HISTORY_GAP_RULE = (
+    "PARTIAL HISTORY. Say that the action history listed for the matter is partial, and "
+    "never present it as the matter's full history."
+)
+
+
+def search_gap_warning(total: int, read: int, newest_first: bool) -> str:
+    found = f"{total} or more" if total >= pages.SEARCH_MAX_RESULTS else str(total)
+    order = (
+        "highest matter ID first, which is about newest first"
+        if newest_first
+        else "in the page's own order"
+    )
+    return (
+        f"The page found {found} matters for one search and shows {pages.SEARCH_PAGE_ROWS} "
+        f"per view. This tool read the first {read}, {order}. Narrow the dates or the text "
+        "to reach the rest."
+    )
+
+
+def search_gap_rule(total: int, read: int) -> str:
+    found = f"{total} or more" if total >= pages.SEARCH_MAX_RESULTS else str(total)
+    return (
+        f"PARTIAL SEARCH. Say that the page found {found} matching matters and this list "
+        f"holds only the first {read} it showed. Never present it as the full list."
+    )
+
+
+def search_dates_warning(first: date, last: date) -> str:
+    return (
+        f"The page's date field accepts {pages.EARLIEST_SEARCH_DATE.isoformat()} to "
+        f"{pages.LATEST_SEARCH_DATE.isoformat()}. The search covered matters introduced from "
+        f"{first.isoformat()} to {last.isoformat()}, both days included."
+    )
+
+
+def history_gap_warning(files: list[str]) -> str:
+    return (
+        f"The matter page showed only part of the action history of file {', '.join(files)}. "
+        "The History list is partial; open LegislationDetailURL for the rest."
+    )
+
+
+def _pages_unread(client: str, reason: str, cause: BaseException) -> SourceQueryError:
+    """The error for pages that were needed and could not be read. It invites a retry."""
+    late = isinstance(cause, TimeoutError) or getattr(cause, "code", None) == "SOURCE_TIMEOUT"
+    return SourceQueryError(
+        f"Legistar pages of {client} could not be read ({type(cause).__name__})",
+        code="SOURCE_TIMEOUT" if late else "SOURCE_UNAVAILABLE",
+        argument="client",
+        public_message=(
+            f"The Legistar API copy for {client} {reason}, so this tool reads the "
+            f"jurisdiction's pages at https://{client}.legistar.com, and they could not be "
+            "read just now. The site may be slow, or this server may be reading it for "
+            "another request. Try again in a minute, or open the site."
+        ),
+    )
+
+
+def _page_deadline(started: float) -> float:
+    """When page reading must end for a call that began at started, on the loop's clock."""
+    now = asyncio.get_running_loop().time()
+    return min(now + PAGE_TIMEOUT_SECONDS, started + CALL_BUDGET_SECONDS)
 
 
 def _invalid(argument: str, message: str) -> SourceQueryError:
@@ -379,14 +629,41 @@ def _positive_id(argument: str, value: int) -> int:
     return value
 
 
-def _odata_text(argument: str, text: str) -> str:
-    """Return text as an OData string literal body, with single quotes doubled."""
+def _search_text(argument: str, text: str) -> str:
+    """Return text with whitespace collapsed, refused when empty, long, or unprintable."""
     normalized = " ".join(text.split())
     if not 2 <= len(normalized) <= MAX_TEXT_LENGTH or any(
         unicodedata.category(c) in {"Cc", "Cf", "Cs"} for c in normalized
     ):
         raise _invalid(argument, f"Give {argument} as 2 to {MAX_TEXT_LENGTH} characters of text.")
-    return normalized.replace("'", "''")
+    return normalized
+
+
+def _odata_text(argument: str, text: str) -> str:
+    """Return text as an OData string literal body, with single quotes doubled."""
+    return _search_text(argument, text).replace("'", "''")
+
+
+def _guid(argument: str, value: str) -> str:
+    normalized = value.strip().upper()
+    if not pages.GUID.match(normalized):
+        raise _invalid(
+            argument,
+            f"Give {argument} as the GUID that Legistar shows with the ID, such as "
+            "9A52EBCA-0730-4056-9FDE-A7AF7B764B17.",
+        )
+    return normalized
+
+
+def _keep_cookies(jar: dict[str, str], headers: httpx.Headers) -> None:
+    """Add the cookies one answer set to the cookies of the call that received it."""
+    for value in headers.get_list("set-cookie"):
+        name, found, content = value.split(";", 1)[0].partition("=")
+        name, content = name.strip(), content.strip()
+        printable = all(32 <= ord(c) < 127 and c != ";" for c in name + content)
+        fits = len(name) + len(content) <= 1000 and (name in jar or len(jar) < 20)
+        if found and name and printable and fits:
+            jar[name] = content
 
 
 def _datetime_literal(day: date) -> str:
@@ -430,6 +707,31 @@ def _item_label(item: dict[str, Any], item_id: int) -> str:
         f"(EventItemId {item_id}, file {item.get('EventItemMatterFile')}): {title}; "
         f"action {item.get('EventItemActionName')}, result {item.get('EventItemPassedFlagName')}"
     )
+
+
+def _web_meeting_label(meeting: int, header: dict[str, Any]) -> str:
+    """Body, date, and minutes status of one meeting page, for the dataset name."""
+    status = header["EventMinutesStatusName"] or "not stated on the page"
+    return (
+        f"{header['EventBodyName']}, meeting {meeting} on {header['EventDate']}, "
+        f"minutes status {status}"
+    )
+
+
+def _web_action_label(item_id: int, header: dict[str, Any]) -> str:
+    """File, name, action, and result of one action page, for the dataset name."""
+    name = str(header["Name"] or "")
+    if len(name) > 160:
+        name = name[:160] + "..."
+    return (
+        f"EventItemId {item_id}, file {header['File']} version {header['Version']}: {name}; "
+        f"action {header['Action']}, result {header['Result']}, mover {header['Mover']}, "
+        f"seconder {header['Seconder']}"
+    )
+
+
+def _same_file(row: dict[str, Any], text: str) -> bool:
+    return str(row["MatterFile"] or "").casefold() == text.casefold()
 
 
 @dataclass
@@ -561,8 +863,13 @@ def _calendar_link(client: str, cell: _Cell | None, path: str) -> tuple[str | No
     host = f"{client}.legistar.com"
     refused = 0
     for href in cell.links:
-        url = urljoin(f"https://{host}/", href)
-        parts = urlsplit(url)
+        try:
+            url = urljoin(f"https://{host}/", href)
+            parts = urlsplit(url)
+        except ValueError:
+            # A link the URL parser refuses counts as one that was left out.
+            refused += 1
+            continue
         if parts.scheme == "https" and parts.netloc == host and parts.path == path:
             return url, refused
         if not href.startswith(("javascript:", "#")):
@@ -600,10 +907,13 @@ def _parse_calendar(client: str, html: str, year: str, *, descending: bool) -> _
         minutes, refused_minutes = _calendar_link(client, cell("Minutes"), "/View.ashx")
         unread += refused_detail + refused_agenda + refused_minutes
         time_cell, place_cell = cell("Meeting Time"), cell("Meeting Location")
+        meeting = pages.reference(client, detail, pages.MEETING_PATH)
         meetings.append(
             (
                 day,
                 {
+                    "EventId": meeting[0] if meeting else None,
+                    "EventGuid": meeting[1] if meeting else None,
                     "EventBodyName": " ".join(cells[column["Name"]].lines()) or None,
                     "EventDate": day.isoformat(),
                     "EventTime": " ".join(time_cell.lines()) or None if time_cell else None,
@@ -640,7 +950,7 @@ class Legistar:
     ) -> None:
         self._http = FixedHostClient(source_name=SOURCE_NAME, client=client)
         self._today = today
-        self._calendar_lock = asyncio.Lock()
+        self._page_lock = asyncio.Lock()
         self._tokens: dict[str, str] = {}
         for name, token in (tokens or {}).items():
             if not _CLIENT.match(name) or not _TOKEN.match(token):
@@ -891,9 +1201,9 @@ class Legistar:
         views: list[str] = []
         unread = 0
         try:
-            # One calendar read at a time per server process keeps a no-login public
+            # One page-reading call at a time per server process keeps a no-login public
             # instance from loading a city's site with parallel page requests.
-            async with asyncio.timeout(CALENDAR_TIMEOUT_SECONDS), self._calendar_lock:
+            async with asyncio.timeout(CALENDAR_TIMEOUT_SECONDS), self._page_lock:
                 prefix = await self._calendar_prefix(page_url)
                 for year in years:
                     label = NEXT_YEAR if year == next_year else str(year)
@@ -996,13 +1306,418 @@ class Legistar:
             client, content.decode("utf-8", "replace"), year, descending=descending
         )
 
-    def get_meeting_items(self, *, client: str, event_id: int) -> PreparedLookup:
+    @asynccontextmanager
+    async def _page_turn(self, deadline: float) -> AsyncIterator[None]:
+        """Hold the one page-reading turn of this process, waiting no later than deadline.
+
+        One page-reading call at a time per server process keeps a no-login public
+        instance from loading a city's site with parallel page requests.
+        """
+        if asyncio.get_running_loop().time() >= deadline:
+            # A budget already spent never starts a request to the site.
+            raise TimeoutError
+        async with asyncio.timeout_at(deadline):
+            await self._page_lock.acquire()
+        try:
+            yield
+        finally:
+            self._page_lock.release()
+
+    async def _page(
+        self,
+        client: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        form: dict[str, str] | None = None,
+        jar: dict[str, str] | None = None,
+        learn: bool = False,
+    ) -> str:
+        """Fetch one page of the client's own Legistar site and return its HTML.
+
+        The host is always <client>.legistar.com and the path one of four page types; no
+        part of the address comes from page content. jar holds the cookies this call has
+        received from the site, and they travel back only to that site within the call.
+        """
+        if path not in pages.PAGE_PATHS:
+            raise SourceError("That Legistar page is not one this server reads")
+        headers = {"Accept": "text/html"}
+        if jar:
+            headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in jar.items())
+        status, answer, content = await self._http.send_with_headers(
+            "POST" if form is not None else "GET",
+            f"{pages.site(client)}/{path}",
+            params=params,
+            form_body=form,
+            headers=headers,
+        )
+        if status != 200:
+            # A redirect is never followed; it reads as a failure here.
+            raise SourceError(f"The Legistar page {path} answered HTTP {status}")
+        if learn and jar is not None:
+            _keep_cookies(jar, answer)
+        return content.decode("utf-8", "replace")
+
+    async def _page_reason(
+        self, client: str, error: SourceQueryError, guid: str | None
+    ) -> str | None:
+        """Why this client's meeting must be read from its pages, or None to keep the error.
+
+        Pages stand in only for an API that cannot answer because of a client setting, or
+        whose copy has stopped updating and so holds no record of the meeting.
+        """
+        if error.code == "CLIENT_MISCONFIGURED":
+            if guid is None:
+                raise SourceQueryError(
+                    f"Legistar client {client} needs event_guid to read its meeting pages",
+                    code="EVENT_GUID_REQUIRED",
+                    argument="event_guid",
+                    http_status=error.http_status,
+                    public_message=(
+                        f"The Legistar API for {client} cannot answer this request because "
+                        "of a setting on the jurisdiction's side, so this tool reads the "
+                        f"meeting's page on https://{client}.legistar.com, which needs the "
+                        "meeting's GUID. Pass event_guid: the EventGuid that find_meetings "
+                        "returned with this EventId, or the GUID in the meeting page's address."
+                    ),
+                ) from error
+            return SETTING_REASON
+        if error.code == "NOT_FOUND" and guid is not None:
+            newest = await self._newest_matter(client)
+            if newest is not None and newest < self._today() - STALE_AFTER:
+                return stale_reason(newest)
+        return None
+
+    async def _meeting_page(
+        self, client: str, meeting: int, guid: str, deadline: float
+    ) -> tuple[pages.Meeting, str]:
+        """One meeting's page and its address. The caller holds the page turn."""
+        async with asyncio.timeout_at(deadline):
+            html = await self._page(
+                client, pages.MEETING_PATH, params={"ID": str(meeting), "GUID": guid}
+            )
+        try:
+            parsed = pages.parse_meeting(client, html)
+        except pages.PageNotFound as error:
+            raise SourceQueryError(
+                f"Legistar site of {client} has no meeting {meeting} with that GUID",
+                code="NOT_FOUND",
+                argument="event_guid",
+                public_message=(
+                    f"The Legistar site of {client} has no meeting page for event_id "
+                    f"{meeting} with that event_guid. Use the EventId and EventGuid that "
+                    "find_meetings returned together."
+                ),
+            ) from error
+        return parsed, pages.page_url(client, pages.MEETING_PATH, meeting, guid)
+
+    async def _web_meeting_items(
+        self, client: str, meeting: int, guid: str, reason: str, started: float
+    ) -> Lookup:
+        """The actions on a meeting's legislative files, from its public page."""
+        deadline = _page_deadline(started)
+        try:
+            async with self._page_turn(deadline):
+                found, url = await self._meeting_page(client, meeting, guid, deadline)
+        except SourceQueryError as error:
+            if error.code == "NOT_FOUND":
+                raise
+            raise _pages_unread(client, reason, error) from error
+        except (SourceError, TimeoutError) as error:
+            raise _pages_unread(client, reason, error) from error
+        rows = [{name: item[name] for name in WEB_ITEM_FIELDS} for item in found.items]
+        result = SourceQueryResult(
+            dataset_id=f"{client}/web-eventitems",
+            dataset_name=(
+                f"Legistar website agenda items, client {client}: "
+                f"{_web_meeting_label(meeting, found.header)}"
+            ),
+            domain=f"{client}.legistar.com",
+            source_url=url,
+            query=(
+                f"{pages.MEETING_PATH}?ID={meeting}&GUID={guid}, view: {found.view or 'not stated'}"
+            ),
+            query_url=url,
+            rows=rows,
+            returned_row_count=len(rows),
+            completeness=Completeness.TRUNCATED if found.unread else Completeness.COMPLETE,
+            schema_sha256=_schema_hash("web-eventitems", WEB_ITEM_FIELDS),
+        )
+        warnings = [
+            web_warning(client, reason),
+            items_view_warning(found.view),
+            PUBLIC_ONLY_WARNING,
+        ]
+        if found.unread:
+            warnings.insert(0, PARTIAL_PAGE_WARNING)
+        return Lookup(
+            result=result,
+            row_grain=WEB_ITEM_GRAIN,
+            warnings=warnings,
+            rules=[web_rule(client, reason), WEB_ITEM_COUNT_RULE, WEB_MINUTES_RULE],
+            escalations=["LEGISTAR_WEB_PAGES"],
+        )
+
+    async def _web_item_votes(
+        self,
+        client: str,
+        meeting: int,
+        guid: str,
+        item_id: int,
+        reason: str,
+        started: float,
+    ) -> Lookup:
+        """Each member's vote on one action, from the action's public page.
+
+        The meeting's page is read first: it shows that the item belongs to the meeting
+        and gives the GUID of the item's action page.
+        """
+        deadline = _page_deadline(started)
+        try:
+            async with self._page_turn(deadline):
+                found, _ = await self._meeting_page(client, meeting, guid, deadline)
+                item_guid = found.item_guids.get(item_id)
+                if item_guid is None and found.unread:
+                    # The item may sit on the part of the page that was not shown.
+                    raise SourceQueryError(
+                        f"The page of meeting {meeting} was only partly shown",
+                        code="SOURCE_UNAVAILABLE",
+                        argument="event_item_id",
+                        public_message=(
+                            f"The page of meeting {meeting} showed only part of its list, "
+                            f"and EventItemId {item_id} was not in that part, so this tool "
+                            "cannot say whether the item belongs to the meeting. Open the "
+                            "meeting page for the rest."
+                        ),
+                    )
+                if item_guid is None:
+                    raise SourceQueryError(
+                        f"Item {item_id} is not on the page of meeting {meeting}",
+                        code="NOT_FOUND",
+                        argument="event_item_id",
+                        public_message=(
+                            f"The page of meeting {meeting} lists no legislative file with "
+                            f"EventItemId {item_id}. Use an EventItemId that "
+                            "get_meeting_items returned for this meeting and event_guid."
+                        ),
+                    )
+                (item,) = [row for row in found.items if row["EventItemId"] == item_id][:1]
+                async with asyncio.timeout_at(deadline):
+                    html = await self._page(
+                        client, pages.ACTION_PATH, params={"ID": str(item_id), "GUID": item_guid}
+                    )
+                action = pages.parse_action(html)
+                if action.header["File"] != item["EventItemMatterFile"]:
+                    # The action page must describe the file the meeting page listed.
+                    raise SourceError("A Legistar action page shows another file")
+        except SourceQueryError as error:
+            if error.argument == "event_item_id" or error.code == "NOT_FOUND":
+                raise
+            raise _pages_unread(client, reason, error) from error
+        except (SourceError, TimeoutError) as error:
+            raise _pages_unread(client, reason, error) from error
+        url = pages.page_url(client, pages.ACTION_PATH, item_id, item_guid)
+        rows = [{name: vote[name] for name in WEB_VOTE_FIELDS} for vote in action.votes]
+        result = SourceQueryResult(
+            dataset_id=f"{client}/web-votes",
+            dataset_name=(
+                f"Legistar website votes, client {client}: "
+                f"{_web_action_label(item_id, action.header)}; "
+                f"{_web_meeting_label(meeting, found.header)}"
+            ),
+            domain=f"{client}.legistar.com",
+            source_url=url,
+            query=f"{pages.ACTION_PATH}?ID={item_id}&GUID={item_guid}",
+            query_url=url,
+            rows=rows,
+            returned_row_count=len(rows),
+            completeness=Completeness.TRUNCATED if action.unread else Completeness.COMPLETE,
+            schema_sha256=_schema_hash("web-votes", WEB_VOTE_FIELDS),
+        )
+        warnings = [web_warning(client, reason), VOTE_RECORD_WARNING, PUBLIC_ONLY_WARNING]
+        if action.unread:
+            warnings.insert(0, PARTIAL_PAGE_WARNING)
+        return Lookup(
+            result=result,
+            row_grain=WEB_VOTE_GRAIN,
+            warnings=warnings,
+            rules=([NO_VOTES_RULE] if not rows else [])
+            + [web_rule(client, reason), VOTE_RULE, WEB_MINUTES_RULE],
+            escalations=["LEGISTAR_WEB_PAGES"] + (["NO_VOTES_RECORDED"] if not rows else []),
+        )
+
+    async def _web_legislation(
+        self,
+        client: str,
+        text: str,
+        first: date | None,
+        last: date | None,
+        count: int,
+        reason: str,
+        started: float,
+    ) -> Lookup:
+        """Legislation from the client's public search page and matter pages.
+
+        The search runs by title and, when the text holds a digit, by file or enactment
+        number too. Only the first view of each search is read. The matter pages of the
+        first matters listed are then read for sponsors, and for the action history of a
+        matter whose file number is the text itself.
+        """
+        deadline = _page_deadline(started)
+        span = None
+        if first or last:
+            span = (
+                max(first or pages.EARLIEST_SEARCH_DATE, pages.EARLIEST_SEARCH_DATE),
+                min(last or pages.LATEST_SEARCH_DATE, pages.LATEST_SEARCH_DATE),
+            )
+            if span[0] > span[1]:
+                raise SourceError("The dates lie outside what the Legistar search page accepts")
+        dates = {"first": span[0], "last": span[1]} if span else {}
+        searches = [pages.Criteria(title=text, **dates)]
+        if any(character.isdigit() for character in text):
+            searches.insert(0, pages.Criteria(file=text, **dates))
+        async with self._page_turn(deadline):
+            async with asyncio.timeout_at(deadline):
+                jar: dict[str, str] = {}
+                form = pages.parse_search_form(
+                    await self._page(client, pages.SEARCH_PATH, jar=jar, learn=True)
+                )
+                if not form.advanced:
+                    form = pages.parse_search_form(
+                        await self._page(
+                            client,
+                            pages.SEARCH_PATH,
+                            form=pages.switch_fields(form),
+                            jar=jar,
+                            learn=True,
+                        )
+                    )
+                if not form.advanced:
+                    raise SourceError("The Legistar legislation page has no advanced search")
+                answers = []
+                for criteria in searches:
+                    # Each search posts the same form and cookies, so one search's
+                    # criteria never carry into the next.
+                    html = await self._page(
+                        client,
+                        pages.SEARCH_PATH,
+                        form=pages.search_fields(form, criteria),
+                        jar=jar,
+                    )
+                    answers.append(pages.parse_search_results(client, html, criteria))
+            found: dict[int, dict[str, Any]] = {}
+            exact: set[int] = set()
+            for criteria, answer in zip(searches, answers, strict=True):
+                rows = answer.rows
+                if criteria.file:
+                    # A matter whose file number is the text itself comes first.
+                    rows = sorted(rows, key=lambda row: not _same_file(row, text))
+                    exact.update(row["MatterId"] for row in rows if _same_file(row, text))
+                for row in rows:
+                    found.setdefault(row["MatterId"], row)
+            listed = list(found.values())[:count]
+            read = 0
+            cut_history: list[str] = []
+            for row in listed[:MAX_DETAIL_PAGES]:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        html = await self._page(
+                            client,
+                            pages.MATTER_PATH,
+                            params={"ID": str(row["MatterId"]), "GUID": row["_guid"]},
+                        )
+                    matter = pages.parse_matter(client, html)
+                    if matter.details["MatterFile"] != row["MatterFile"]:
+                        raise SourceError("A Legistar matter page shows another file")
+                except (SourceError, TimeoutError):
+                    # The matters stay listed; the pages not read are named below.
+                    break
+                for name, value in matter.details.items():
+                    if value is not None or row.get(name) is None:
+                        row[name] = value
+                row["DetailPageRead"] = True
+                if row["MatterId"] in exact:
+                    row["History"] = matter.history
+                    if matter.history_unread:
+                        cut_history.append(str(row["MatterFile"]))
+                read += 1
+        rows = [
+            {
+                name: row.get(name, False if name == "DetailPageRead" else None)
+                for name in WEB_MATTER_FIELDS
+            }
+            for row in listed
+        ]
+        gaps = [
+            (answer.total, len(answer.rows), answer.newest_first)
+            for answer in answers
+            if answer.total > len(answer.rows)
+        ]
+        page_url = f"{pages.site(client)}/{pages.SEARCH_PATH}"
+        result = SourceQueryResult(
+            dataset_id=f"{client}/web-matters",
+            dataset_name=f"Legistar website legislation, client {client}",
+            domain=f"{client}.legistar.com",
+            source_url=page_url,
+            query=f"{pages.SEARCH_PATH} advanced search: "
+            + " | ".join(criteria.describe() for criteria in searches),
+            query_url=page_url,
+            rows=rows,
+            returned_row_count=len(rows),
+            completeness=(
+                Completeness.TRUNCATED
+                if gaps or cut_history or len(found) > count
+                else Completeness.COMPLETE
+            ),
+            schema_sha256=_schema_hash("web-matters", WEB_MATTER_FIELDS),
+        )
+        warnings = [web_warning(client, reason), WEB_SEARCH_WARNING]
+        rules = [web_rule(client, reason), WEB_SPONSOR_RULE]
+        escalations = ["LEGISTAR_WEB_PAGES"]
+        for total, shown, newest_first in gaps:
+            warnings.insert(0, search_gap_warning(total, shown, newest_first))
+            rules.insert(0, search_gap_rule(total, shown))
+        if gaps:
+            escalations.append("LEGISTAR_WEB_SEARCH_GAP")
+        if cut_history:
+            warnings.insert(0, history_gap_warning(cut_history))
+            rules.insert(0, HISTORY_GAP_RULE)
+            escalations.append("LEGISTAR_WEB_HISTORY_GAP")
+        if read < len(rows):
+            warnings.append(detail_warning(read, len(rows)))
+            warnings.append(WEB_TITLE_CUT_WARNING)
+            rules.append(DETAIL_RULE)
+            escalations.append("LEGISTAR_WEB_DETAILS_UNREAD")
+        if span:
+            warnings.append(NO_DATE_WARNING)
+            if (first, last) != span:
+                warnings.append(search_dates_warning(*span))
+        warnings.extend([PUBLIC_ONLY_WARNING, WEB_SEARCH_LINK_WARNING])
+        return Lookup(
+            result=result,
+            row_grain=WEB_MATTER_GRAIN,
+            warnings=warnings,
+            rules=rules,
+            escalations=escalations,
+        )
+
+    def get_meeting_items(
+        self, *, client: str, event_id: int, event_guid: str | None = None
+    ) -> PreparedLookup:
         name = validate_client(client)
         meeting = _positive_id("event_id", event_id)
+        guid = _guid("event_guid", event_guid) if event_guid is not None else None
         params = {"AgendaNote": "1", "MinutesNote": "1", "$top": str(MAX_REPLY_ROWS)}
 
         async def run() -> Lookup:
-            event, _ = await self._get(name, f"events/{meeting}", {}, by_id=True)
+            started = asyncio.get_running_loop().time()
+            try:
+                event, _ = await self._get(name, f"events/{meeting}", {}, by_id=True)
+            except SourceQueryError as error:
+                reason = await self._page_reason(name, error, guid)
+                if reason is None or guid is None:
+                    raise
+                return await self._web_meeting_items(name, meeting, guid, reason, started)
             if not isinstance(event, dict):
                 raise SourceError("The Legistar Web API returned a malformed meeting")
             records, public_url = await self._list(
@@ -1038,17 +1753,27 @@ class Legistar:
 
         return PreparedLookup(
             host=LEGISTAR_HOST,
-            arguments={"client": name, "event_id": meeting},
+            arguments={"client": name, "event_id": meeting, "event_guid": guid},
             run=run,
         )
 
-    def get_item_votes(self, *, client: str, event_id: int, event_item_id: int) -> PreparedLookup:
+    def get_item_votes(
+        self, *, client: str, event_id: int, event_item_id: int, event_guid: str | None = None
+    ) -> PreparedLookup:
         name = validate_client(client)
         meeting = _positive_id("event_id", event_id)
         item_id = _positive_id("event_item_id", event_item_id)
+        guid = _guid("event_guid", event_guid) if event_guid is not None else None
 
         async def run() -> Lookup:
-            event, _ = await self._get(name, f"events/{meeting}", {}, by_id=True)
+            started = asyncio.get_running_loop().time()
+            try:
+                event, _ = await self._get(name, f"events/{meeting}", {}, by_id=True)
+            except SourceQueryError as error:
+                reason = await self._page_reason(name, error, guid)
+                if reason is None or guid is None:
+                    raise
+                return await self._web_item_votes(name, meeting, guid, item_id, reason, started)
             item, _ = await self._get(
                 name, f"events/{meeting}/eventitems/{item_id}", {}, by_id=True
             )
@@ -1102,7 +1827,12 @@ class Legistar:
 
         return PreparedLookup(
             host=LEGISTAR_HOST,
-            arguments={"client": name, "event_id": meeting, "event_item_id": item_id},
+            arguments={
+                "client": name,
+                "event_id": meeting,
+                "event_item_id": item_id,
+                "event_guid": guid,
+            },
             run=run,
         )
 
@@ -1116,6 +1846,7 @@ class Legistar:
         limit: int = 50,
     ) -> PreparedLookup:
         name = validate_client(client)
+        words = _search_text("text", text)
         literal = _odata_text("text", text)
         first = _date("introduced_from", introduced_from) if introduced_from else None
         last = _date("introduced_to", introduced_to) if introduced_to else None
@@ -1140,14 +1871,36 @@ class Legistar:
         )
 
         async def run() -> Lookup:
+            started = asyncio.get_running_loop().time()
             check = asyncio.create_task(self._newest_matter(name))
             try:
                 records, public_url = await self._list(name, "matters", params)
+            except SourceQueryError as error:
+                check.cancel()
+                if error.code != "CLIENT_MISCONFIGURED":
+                    raise
+                try:
+                    return await self._web_legislation(
+                        name, words, first, last, count, SETTING_REASON, started
+                    )
+                except (SourceError, TimeoutError) as failure:
+                    raise _pages_unread(name, SETTING_REASON, failure) from failure
             except BaseException:
                 check.cancel()
                 raise
             # Bounded by the check's own timeout, counted from when both started.
             newest = await check
+            stale = newest is not None and newest < self._today() - STALE_AFTER
+            site_unread = False
+            if stale and newest is not None:
+                try:
+                    return await self._web_legislation(
+                        name, words, first, last, count, stale_reason(newest), started
+                    )
+                except (SourceError, TimeoutError):
+                    # The site could not be read, so the API's older copy stands below,
+                    # under its warning that it has stopped updating.
+                    site_unread = True
             rows = []
             for record in records[:count]:
                 row = _project(record, MATTER_FIELDS)
@@ -1179,7 +1932,9 @@ class Legistar:
             warnings.extend(self._client_warnings(name))
             rules = [LEGISTAR_RULE]
             escalations: list[str] = []
-            if newest is not None and newest < self._today() - STALE_AFTER:
+            if stale and newest is not None:
+                if site_unread:
+                    warnings.insert(0, SITE_UNREAD_WARNING)
                 warnings.insert(0, stale_warning(name, newest))
                 rules.insert(0, stale_rule(name, newest))
                 escalations.append("LEGISTAR_API_STALE")

@@ -1056,13 +1056,14 @@ async def test_geocode_address_failure_is_a_tool_error_over_mcp(
 
 
 def patch_legistar(
-    monkeypatch: pytest.MonkeyPatch, response: httpx.Response
+    monkeypatch: pytest.MonkeyPatch,
+    response: httpx.Response | Callable[[httpx.Request], httpx.Response],
 ) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return response
+        return response(request) if callable(response) else response
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(mcp_server, "Legistar", lambda **kwargs: Legistar(client=client, **kwargs))
@@ -1167,6 +1168,84 @@ async def test_an_invalid_legistar_client_is_refused_and_audited_without_a_reque
     assert first["arguments"]["client"] == "evil.example.com"
     assert first["domain"] == "webapi.legistar.com"
     assert second["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_meeting_items_from_a_legistar_page_return_evidence_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Recorded from sfgov.legistar.com on 2026-11-26; see tests/fixtures/legistar/README.md.
+    meeting_page = (
+        Path(__file__).parent / "fixtures" / "legistar" / "meeting_detail.html"
+    ).read_text(encoding="utf-8")
+    guid = "9A52EBCA-0730-4056-9FDE-A7AF7B764B17"
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "webapi.legistar.com":
+            return httpx.Response(
+                400,
+                text="'Agenda Draft Status' is not setup in settings.",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(200, text=meeting_page)
+
+    legistar_client, legistar_requests = patch_legistar(monkeypatch, route)
+    server, http_client, _, logger_name = build_test_server(monkeypatch, write_deployment, tmp_path)
+    caplog.set_level(logging.INFO, logger=logger_name)
+    arguments = {
+        "client": "sfgov",
+        "event_id": 1439610,
+        "reporter_question": "What did the Rules Committee take up?",
+    }
+    try:
+        async with Client(server, mode="legacy") as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            without_guid = await client.call_tool("get_meeting_items", arguments)
+            malformed = await client.call_tool(
+                "get_meeting_items", arguments | {"event_guid": "x" * 36}
+            )
+            result = await client.call_tool("get_meeting_items", arguments | {"event_guid": guid})
+    finally:
+        await http_client.aclose()
+        await legistar_client.aclose()
+
+    for name in ("get_meeting_items", "get_item_votes"):
+        schema = tools[name].input_schema
+        assert "event_guid" in schema["properties"]
+        assert "event_guid" not in schema["required"]
+    assert without_guid.structured_content["error"]["code"] == "EVENT_GUID_REQUIRED"
+    assert malformed.structured_content["error"]["code"] == "INVALID_QUERY_ARGUMENT"
+    assert result.is_error is False
+    payload = result.structured_content
+    QueryResponse.model_validate(payload)
+    assert payload["domain"] == "sfgov.legistar.com"
+    assert payload["returned_row_count"] == 7
+    assert payload["completeness"] == "complete"
+    assert payload["rows"][-1]["EventItemMatterFile"] == "260875"
+    assert (
+        payload["query_url"]
+        == payload["source_url"]
+        == (f"https://sfgov.legistar.com/MeetingDetail.aspx?ID=1439610&GUID={guid}")
+    )
+    assert payload["warnings"][0].startswith("The Legistar API copy for sfgov cannot answer")
+    assert payload["presentation_rules"][0].startswith("WEBSITE PAGES.")
+    # A row is one recorded action; the 7 rows of this meeting hold 5 files.
+    assert payload["methodology"]["row_grain"].startswith("One action the clerk recorded")
+    assert len({row["EventItemMatterFile"] for row in payload["rows"]}) == 5
+    assert payload["snapshot"]["uri"].startswith("file://")
+    assert [request.url.host for request in legistar_requests] == [
+        "webapi.legistar.com",
+        "webapi.legistar.com",
+        "sfgov.legistar.com",
+    ]
+    events = audit_events(caplog, logger_name)
+    assert [event["status"] for event in events] == ["error", "error", "success"]
+    assert events[-1]["arguments"]["event_guid"] == guid
+    assert events[-1]["domain"] == "sfgov.legistar.com"
+    assert "LEGISTAR_WEB_PAGES" in events[-1]["presentation_escalations"]
 
 
 @pytest.mark.asyncio

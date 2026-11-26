@@ -201,6 +201,16 @@ LEGISTAR_CLIENT_FIELD = Field(
 
 DATE_FIELD = Field(description="A date as YYYY-MM-DD.", min_length=10, max_length=10)
 
+EVENT_GUID_FIELD = Field(
+    description=(
+        "The meeting's GUID: the EventGuid that find_meetings or a matter's History "
+        "returned with the EventId. Needed only for a jurisdiction whose meetings are read "
+        "from its Legistar pages, such as San Francisco (sfgov)."
+    ),
+    min_length=36,
+    max_length=36,
+)
+
 
 def _secret(value: SecretStr | None) -> str | None:
     return value.get_secret_value() if value is not None else None
@@ -624,8 +634,8 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "token, and a tool error says when this server lacks one. When a jurisdiction's "
             "API cannot list meetings because of a setting on its side, as San Francisco's "
             "cannot, the tool reads its public Legistar calendar page instead, at most two "
-            "calendar years per call, and says so; those meetings have agenda and minutes "
-            "files but no items or votes in get_meeting_items. Failures return isError=true "
+            "calendar years per call, and says so; pass such a meeting's EventId and "
+            "EventGuid to get_meeting_items and get_item_votes. Failures return isError=true "
             "with an error object."
         ),
     )
@@ -669,8 +679,11 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         description=(
             "List the agenda items of one Legistar meeting, with the action, result, tally, "
             "mover, and seconder the clerk recorded for each. Use an EventId that "
-            "find_meetings returned for the same client. Same response shape and rules as "
-            "query_dataset."
+            "find_meetings returned for the same client. When the jurisdiction's API cannot "
+            "answer or has stopped updating, as San Francisco's has, pass event_guid too: "
+            "the tool then reads the meeting's public Legistar page and says so. That page "
+            "has one row per action recorded on a legislative file, with file number, "
+            "action, and result. Same response shape and rules as query_dataset."
         ),
     )
     async def get_meeting_items(
@@ -678,8 +691,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         event_id: Annotated[int, Field(description="EventId from find_meetings.", ge=1)],
         reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
         ctx: Context[AppState],
+        event_guid: Annotated[str | None, EVENT_GUID_FIELD] = None,
     ) -> Annotated[CallToolResult, dict[str, Any]]:
-        arguments = {"client": client, "event_id": event_id}
+        arguments = {"client": client, "event_id": event_id, "event_guid": event_guid}
         return await run_lookup(
             ctx,
             action="get_meeting_items",
@@ -694,7 +708,11 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         description=(
             "List each member's vote on one agenda item of a Legistar meeting, as the clerk "
             "recorded it. Use the EventId from find_meetings and the EventItemId from "
-            "get_meeting_items. Same response shape and rules as query_dataset."
+            "get_meeting_items. When the jurisdiction's API cannot answer or has stopped "
+            "updating, as San Francisco's has, pass event_guid too: the tool then reads the "
+            "roll call from the action's public Legistar page and says so. A matter's "
+            "History from search_legislation gives the EventId, EventGuid, and EventItemId "
+            "of each action. Same response shape and rules as query_dataset."
         ),
     )
     async def get_item_votes(
@@ -705,8 +723,14 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         ],
         reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
         ctx: Context[AppState],
+        event_guid: Annotated[str | None, EVENT_GUID_FIELD] = None,
     ) -> Annotated[CallToolResult, dict[str, Any]]:
-        arguments = {"client": client, "event_id": event_id, "event_item_id": event_item_id}
+        arguments = {
+            "client": client,
+            "event_id": event_id,
+            "event_item_id": event_item_id,
+            "event_guid": event_guid,
+        }
         return await run_lookup(
             ctx,
             action="get_item_votes",
@@ -722,8 +746,13 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "Search a jurisdiction's Legistar legislation, such as ordinances, resolutions, "
             "and reports, by words in the title or name or by exact file number, optionally "
             "within an introduction date range. Returns each matter's type, status, body, "
-            "dates, and page link, newest first. Same response shape and rules as "
-            "query_dataset."
+            "dates, and page link, newest first. When the jurisdiction's API copy has "
+            "stopped updating or cannot answer, as San Francisco's has, the tool reads the "
+            "public Legistar search page and matter pages instead and says so: it returns "
+            "current matters, a file-number match first and the rest in the page's own "
+            "order, with sponsors for the first ten listed, and, for a search by one file "
+            "number, that matter's action history with the IDs get_item_votes needs. Same "
+            "response shape and rules as query_dataset."
         ),
     )
     async def search_legislation(

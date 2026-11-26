@@ -47,11 +47,12 @@ class FixedHostClient:
         *,
         params: dict[str, str] | None = None,
         json_body: Any = None,
+        form_body: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, bytes]:
         """Return the status code and body. Network failures raise SourceError."""
         status, _, content = await self.send_with_headers(
-            method, url, params=params, json_body=json_body, headers=headers
+            method, url, params=params, json_body=json_body, form_body=form_body, headers=headers
         )
         return status, content
 
@@ -62,19 +63,22 @@ class FixedHostClient:
         *,
         params: dict[str, str] | None = None,
         json_body: Any = None,
+        form_body: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, httpx.Headers, bytes]:
         """Return the status code, response headers, and body.
 
-        headers override the defaults for this request only. A request carries only the
-        cookies its caller names: the client keeps whatever cookies sources set, and one
-        caller's answer must never shape another caller's request.
+        headers override the defaults for this request only. form_body is sent as an HTML
+        form post. A request carries only the cookies its caller names: the client keeps
+        whatever cookies sources set, and one caller's answer must never shape another
+        caller's request.
         """
         request = self._client.build_request(
             method,
             url,
             params=params,
             json=json_body,
+            data=form_body,
             headers={**self._headers, **(headers or {})},
         )
         if not any(name.lower() == "cookie" for name in headers or {}):
