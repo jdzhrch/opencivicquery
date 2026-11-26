@@ -1,0 +1,370 @@
+{
+ "meta": {
+  "total_count": 7
+ },
+ "items": [
+  {
+   "id": 83242,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/83242/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--october-22-2025--october-29-2025-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--october-22-2025--october-29-2025-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-10-16T13:03:18.712401-07:00",
+    "locale": "en"
+   },
+   "title": "October 22, 2025 and October 29, 2025 Police Commission meeting - No Meeting Notice",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2025-10-22",
+      "start_time": "17:30:00",
+      "end_date": "2025-10-29",
+      "end_time": "17:30:00",
+      "include_end_date_time": "yes"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 80617,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/80617/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--september-3-2025--september-3-2025-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--september-3-2025--september-3-2025-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-08-29T12:05:21.197815-07:00",
+    "locale": "en"
+   },
+   "title": "September 3, 2025 Police Commission meeting",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2025-09-03",
+      "start_time": "17:30:00",
+      "end_date": "2025-09-03",
+      "end_time": "17:30:00",
+      "include_end_date_time": "yes"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "videos": [],
+   "related_documents": [
+    {
+     "type": "downloadable_files",
+     "value": {
+      "title": "September 3, 2025 Minutes",
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 45961,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/45961/Sept_3_2025_in-person.pdf"
+         },
+         "title": "Sept 3 2025 (in-person)",
+         "file": "https://media.api.sf.gov/documents/Sept_3_2025_in-person.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2025-10-09T10:17:56.815468-07:00"
+        },
+        "id": "b9d8fddb-0823-483c-af13-b80d37a84208"
+       }
+      ]
+     },
+     "id": "59ac758e-b921-4c51-9ca8-14373e99fc30"
+    }
+   ]
+  },
+  {
+   "id": 79905,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/79905/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--august-13-2025--august-13-2025-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--august-13-2025--august-13-2025-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-08-08T12:14:55.901518-07:00",
+    "locale": "en"
+   },
+   "title": "August 13, 2025 Police Commission meeting - Special Meeting",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2025-08-13",
+      "start_time": "17:30:00",
+      "end_date": "2025-08-13",
+      "end_time": "17:30:00",
+      "include_end_date_time": "no"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "videos": [],
+   "related_documents": [
+    {
+     "type": "downloadable_files",
+     "value": {
+      "title": "Aug 13 2025 Minutes",
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 44223,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/44223/Aug_13_2025_in-person_-_Special_Meeting.pdf"
+         },
+         "title": "Aug 13 2025 (in-person) - Special Meeting",
+         "file": "https://media.api.sf.gov/documents/Aug_13_2025_in-person_-_Special_Meeting.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2025-09-04T10:37:37.729154-07:00"
+        },
+        "id": "5494a9b9-8ecf-4aef-a3b6-a892b6cd47ad"
+       }
+      ]
+     },
+     "id": "d4a9ab01-8561-48d6-889e-76459abd87a9"
+    }
+   ]
+  },
+  {
+   "id": 79904,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/79904/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--august-27-2025--august-27-2025-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--august-27-2025--august-27-2025-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-08-08T12:15:14.439171-07:00",
+    "locale": "en"
+   },
+   "title": "August 27, 2025 Police Commission meeting - No Meeting Notice",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2025-08-27",
+      "start_time": "17:30:00",
+      "end_date": "2025-08-27",
+      "end_time": "17:30:00",
+      "include_end_date_time": "no"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 6205,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/6205/",
+    "html_url": "http://api.sf.gov/meeting--january-25-2023--january-25-2023-police-commission-meeting-no-meeting-notice/",
+    "slug": "meeting--january-25-2023--january-25-2023-police-commission-meeting-no-meeting-notice",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": null,
+    "locale": "en"
+   },
+   "title": "January 25, 2023 Police Commission meeting - No meeting notice",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": true,
+      "start_date": "2023-01-25",
+      "start_time": "00:00:00",
+      "end_date": "2023-01-25",
+      "end_time": null,
+      "include_end_date_time": "no"
+     },
+     "id": "9d6f3d38-9e3b-4909-8c3c-8521c06ec1c1"
+    }
+   ],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 5312,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/5312/",
+    "html_url": "http://api.sf.gov/meeting--may-25-2022-police-commission-meeting-no-meeting-notice-0/",
+    "slug": "meeting--may-25-2022-police-commission-meeting-no-meeting-notice-0",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": null,
+    "locale": "en"
+   },
+   "title": "May 25, 2022 Police Commission meeting - No meeting notice",
+   "cancelled": false,
+   "date_time": [],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 5209,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/5209/",
+    "html_url": "http://api.sf.gov/meeting--march-9-2022--march-9-2022-police-commission-meeting/",
+    "slug": "meeting--march-9-2022--march-9-2022-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": null,
+    "locale": "en"
+   },
+   "title": "March 9, 2022 Police Commission meeting",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2022-03-09",
+      "start_time": "17:30:00",
+      "end_date": "2022-03-09",
+      "end_time": "17:30:00",
+      "include_end_date_time": "yes"
+     },
+     "id": "455fc285-1e67-49ea-88fb-415ad2dddfde"
+    }
+   ],
+   "videos": [],
+   "related_documents": [
+    {
+     "type": "downloadable_files",
+     "value": {
+      "title": "Supporting documents",
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 3603,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/3603/PoliceCommission031622-SFPD_SB1421MonthlyReport_LDopHIt.pdf"
+         },
+         "title": "March 16, 2022 Report on public records requests",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission031622-SFPD_SB1421MonthlyReport_LDopHIt.pdf",
+         "description": "<p data-block-key=\"3iqm5\">Status of public records requests made pursuant to Senate Bill 1421 &amp; Senate Bill 16, Peac [trimmed]",
+         "published_date": "2022-03-16",
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2024-11-22T14:08:45.057502-08:00"
+        },
+        "id": "b99d5169-7876-4066-b313-38d92344dcea"
+       },
+       {
+        "type": "document",
+        "value": {
+         "id": 3604,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/3604/PoliceCommission031622-DPA_SB1421-SB16MonthlyReport_lXhI3p9.pdf"
+         },
+         "title": "March 9, 2022 Report on public records requests",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission031622-DPA_SB1421-SB16MonthlyReport_lXhI3p9.pdf",
+         "description": "<p data-block-key=\"ob8uh\">This report provides an update on the status of public record requests and documents produced  [trimmed]",
+         "published_date": "2022-03-09",
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2024-11-22T14:08:45.565013-08:00"
+        },
+        "id": "fba9392f-3da7-402a-b39b-3b600bfa9945"
+       }
+      ]
+     },
+     "id": "37115fc9-ecbb-483c-8e0d-b1e841382dd9"
+    },
+    {
+     "type": "downloadable_files",
+     "value": {
+      "title": "Minutes",
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 3764,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/3764/FEBRUARY_9.pdf"
+         },
+         "title": "2/9/22 Minutes",
+         "file": "https://media.api.sf.gov/documents/FEBRUARY_9.pdf",
+         "description": "<p data-block-key=\"fv7ep\">test</p>",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2024-11-22T14:10:20.267810-08:00"
+        },
+        "id": "6fbb5597-6f40-4937-8e2c-ad2595ad9999"
+       }
+      ]
+     },
+     "id": "4791cf9d-5b70-4899-815b-5f08f4254975"
+    }
+   ]
+  }
+ ]
+}

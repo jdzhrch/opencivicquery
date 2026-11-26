@@ -1,0 +1,57 @@
+{
+ "meta": {
+  "total_count": 1
+ },
+ "items": [
+  {
+   "id": 109274,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/109274/",
+    "html_url": "http://api.sf.gov/meeting--november-2-2026--november-2-2026-health-commission-meeting/",
+    "slug": "meeting--november-2-2026--november-2-2026-health-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-05-01T16:08:47.438000-07:00",
+    "locale": "en"
+   },
+   "title": "November 2, 2026 Health Commission Meeting",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2026-11-02",
+      "start_time": "16:00:00",
+      "end_date": "2026-11-02",
+      "end_time": null,
+      "include_end_date_time": "no"
+     },
+     "id": "5adba983-20a7-4bfa-8cbf-cc185552269a"
+    }
+   ],
+   "videos": [
+    {
+     "type": "video",
+     "value": {
+      "title": "Meeting Video",
+      "description": "",
+      "video_type": [
+       {
+        "type": "external_link",
+        "value": {
+         "url": "https://sanfrancisco.granicus.com/player/clip/53478?view_id=171&redirect=true",
+         "link_text": "Watch video"
+        },
+        "id": "d66e9046-6175-4242-a86f-f0984f5f19d7"
+       }
+      ]
+     },
+     "id": "ff0ba9ff-b678-40cb-9c88-9f32c6bfdf6d"
+    }
+   ],
+   "related_documents": []
+  }
+ ]
+}

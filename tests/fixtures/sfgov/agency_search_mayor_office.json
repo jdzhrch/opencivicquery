@@ -1,0 +1,77 @@
+{
+ "meta": {
+  "total_count": 5
+ },
+ "items": [
+  {
+   "id": 559,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/559/",
+    "html_url": "http://api.sf.gov/departments--office-mayor/",
+    "slug": "departments--office-mayor",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-02-18T13:46:02.740803-08:00",
+    "locale": "en"
+   },
+   "title": "Office of the Mayor"
+  },
+  {
+   "id": 185,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/185/",
+    "html_url": "http://api.sf.gov/departments--mayors-office-innovation/",
+    "slug": "departments--mayors-office-innovation",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-01-30T17:20:05.021000-08:00",
+    "locale": "en"
+   },
+   "title": "Mayor's Office of Innovation"
+  },
+  {
+   "id": 72406,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/72406/",
+    "html_url": "http://api.sf.gov/departments--mayors-office-for-victims-rights/",
+    "slug": "departments--mayors-office-for-victims-rights",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-01-31T14:33:43.447985-08:00",
+    "locale": "en"
+   },
+   "title": "Mayor's Office for Victims' Rights"
+  },
+  {
+   "id": 22930,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/22930/",
+    "html_url": "http://api.sf.gov/departments--office-former-mayor-london-breed/",
+    "slug": "departments--office-former-mayor-london-breed",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": null,
+    "locale": "en"
+   },
+   "title": "Office of Former Mayor London Breed"
+  },
+  {
+   "id": 308,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/308/",
+    "html_url": "http://api.sf.gov/departments--mayors-office-housing-and-community-development/",
+    "slug": "departments--mayors-office-housing-and-community-development",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-01-22T11:56:05.874000-08:00",
+    "locale": "en"
+   },
+   "title": "Mayor's Office of Housing and Community Development"
+  }
+ ]
+}

@@ -1,0 +1,64 @@
+{
+ "meta": {
+  "total_count": 8
+ },
+ "items": [
+  {
+   "id": 51716,
+   "meta": {
+    "type": "cms.BaseDocument",
+    "download_url": "https://api.sf.gov/documents/51716/2026.03.02_LHCB_Meeting_.pdf"
+   },
+   "title": "Point in Time Count Debrief",
+   "collection": {
+    "id": 1,
+    "meta": {
+     "type": "wagtailcore.Collection"
+    }
+   },
+   "created_at": "2026-03-02T13:53:01.448382-08:00",
+   "description": "",
+   "file": "https://media.api.sf.gov/documents/2026.03.02_LHCB_Meeting_.pdf",
+   "published_date": "2026-03-02",
+   "tags": []
+  },
+  {
+   "id": 42185,
+   "meta": {
+    "type": "cms.BaseDocument",
+    "download_url": "https://api.sf.gov/documents/42185/RFI_153_PIT_Count.pdf"
+   },
+   "title": "RFI #153 Point in Time Count",
+   "collection": {
+    "id": 1,
+    "meta": {
+     "type": "wagtailcore.Collection"
+    }
+   },
+   "created_at": "2025-07-02T14:24:42.165952-07:00",
+   "description": "",
+   "file": "https://media.api.sf.gov/documents/RFI_153_PIT_Count.pdf",
+   "published_date": null,
+   "tags": []
+  },
+  {
+   "id": 31928,
+   "meta": {
+    "type": "cms.BaseDocument",
+    "download_url": "https://api.sf.gov/documents/31928/2021-Sheltered-PIT-Count_9ZQbv3Y.pdf"
+   },
+   "title": "2021 Sheltered Point in Time Count Report",
+   "collection": {
+    "id": 1,
+    "meta": {
+     "type": "wagtailcore.Collection"
+    }
+   },
+   "created_at": "2024-11-25T11:41:33.153219-08:00",
+   "description": "<p data-block-key=\"1alp9\">In 2021, due to the challenges of COVID-19, HSH <a href=\"https://hsh.sfgov.org/wp-content/uplo [trimmed]",
+   "file": "https://media.api.sf.gov/documents/2021-Sheltered-PIT-Count_9ZQbv3Y.pdf",
+   "published_date": null,
+   "tags": []
+  }
+ ]
+}

@@ -1,0 +1,119 @@
+{
+ "meta": {
+  "total_count": 9
+ },
+ "items": [
+  {
+   "id": 943,
+   "meta": {
+    "type": "sf.Report",
+    "detail_url": "https://api.sf.gov/api/v2/pages/943/",
+    "html_url": "http://api.sf.gov/reports--september-2024--2024-point-time-count/",
+    "slug": "reports--september-2024--2024-point-time-count",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-01-17T13:54:49.668195-08:00",
+    "locale": "en"
+   },
+   "title": "2024 Point-in-Time Count"
+  },
+  {
+   "id": 86885,
+   "meta": {
+    "type": "sf.Event",
+    "detail_url": "https://api.sf.gov/api/v2/pages/86885/",
+    "html_url": "http://api.sf.gov/event-20260129-point-in-time-pit-count/",
+    "slug": "event-20260129-point-in-time-pit-count",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-01-06T17:30:17.845267-08:00",
+    "locale": "en"
+   },
+   "title": "Point-in-Time (PIT) Count"
+  },
+  {
+   "id": 109140,
+   "meta": {
+    "type": "sf.Report",
+    "detail_url": "https://api.sf.gov/api/v2/pages/109140/",
+    "html_url": "http://api.sf.gov/2026-point-in-time-count/",
+    "slug": "2026-point-in-time-count",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-10-29T09:42:07.729000-07:00",
+    "locale": "en"
+   },
+   "title": "2026 Point-in-Time Count"
+  },
+  {
+   "id": 4765,
+   "meta": {
+    "type": "sf.DataStory",
+    "detail_url": "https://api.sf.gov/api/v2/pages/4765/",
+    "html_url": "http://api.sf.gov/data--point-time-count-dashboard/",
+    "slug": "data--point-time-count-dashboard",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-02-25T10:28:10.688000-08:00",
+    "locale": "en"
+   },
+   "title": "Point-in-Time Count Dashboard"
+  },
+  {
+   "id": 4764,
+   "meta": {
+    "type": "sf.DataStory",
+    "detail_url": "https://api.sf.gov/api/v2/pages/4764/",
+    "html_url": "http://api.sf.gov/data--point-time-survey-results/",
+    "slug": "data--point-time-survey-results",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-02-25T10:29:27.205000-08:00",
+    "locale": "en"
+   },
+   "title": "Point-in-Time Count Survey Results"
+  },
+  {
+   "id": 4774,
+   "meta": {
+    "type": "sf.DataStory",
+    "detail_url": "https://api.sf.gov/api/v2/pages/4774/",
+    "html_url": "http://api.sf.gov/data--point-time-youth-survey-results/",
+    "slug": "data--point-time-youth-survey-results",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-02-25T10:30:12.797000-08:00",
+    "locale": "en"
+   },
+   "title": "Point-in-Time Count Youth Survey Results"
+  },
+  {
+   "id": 68514,
+   "meta": {
+    "type": "sf.ResourceCollection",
+    "detail_url": "https://api.sf.gov/api/v2/pages/68514/",
+    "html_url": "http://api.sf.gov/san-francisco-point-time-pit-count/",
+    "slug": "san-francisco-point-time-pit-count",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-12-30T10:08:01.883000-08:00",
+    "locale": "en"
+   },
+   "title": "San Francisco Point-in-Time (PIT) Count"
+  },
+  {
+   "id": 84920,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/84920/",
+    "html_url": "http://api.sf.gov/meeting-20251124-community-input-session-2026-point-in-time-count-2-of-2/",
+    "slug": "meeting-20251124-community-input-session-2026-point-in-time-count-2-of-2",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-11-19T11:06:25.744086-08:00",
+    "locale": "en"
+   },
+   "title": "Community Input Session: 2026 Point-in-Time Count (2 of 2)"
+  }
+ ]
+}

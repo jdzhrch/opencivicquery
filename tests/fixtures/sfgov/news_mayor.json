@@ -1,0 +1,43 @@
+{
+ "meta": {
+  "total_count": 277
+ },
+ "items": [
+  {
+   "meta": {
+    "id": 110692,
+    "html_url": "http://api.sf.gov/news-mayor-lurie-signs-legislation-increasing-relocation-payments-for-displaced-renters/"
+   },
+   "title": "Mayor Lurie Signs Legislation Increasing Relocation Payments for Displaced Renters",
+   "news_type": "news",
+   "image": null,
+   "date": "2026-11-24",
+   "abstract": "Raises Required Ellis Act Payments by 25%, Nearly $3,000 per Tenant, to Reflect Rising Cost of Finding a New Home in San [trimmed]",
+   "body": "SAN FRANCISCO – Mayor Daniel Lurie today signed legislation increasing the payments landlords must make to ..."
+  },
+  {
+   "meta": {
+    "id": 110575,
+    "html_url": "http://api.sf.gov/news-mayor-luries-statement-on-san-francisco-competing-for-2031-fifa-womens-world-cup/"
+   },
+   "title": "Mayor Lurie's Statement on San Francisco Competing for 2031 FIFA Women's World Cup",
+   "news_type": "news",
+   "image": null,
+   "date": "2026-11-23",
+   "abstract": "",
+   "body": "SAN FRANCISCO – Mayor Daniel Lurie today released the following statement after the U.S. was selected as a ..."
+  },
+  {
+   "meta": {
+    "id": 110647,
+    "html_url": "http://api.sf.gov/news-mayor-lurie-signs-legislation-investing-18-million-to-support-san-franciscos-immigrant-communities/"
+   },
+   "title": "Mayor Lurie Signs Legislation Investing $1.8 Million to Support San Francisco's Immigrant Communities",
+   "news_type": "news",
+   "image": null,
+   "date": "2026-11-23",
+   "abstract": "Funding Will Strengthen Rapid Response Network, Legal Services, Community Education, and 24/7 Multilingual Assistance fo [trimmed]",
+   "body": "SAN FRANCISCO – Mayor Daniel Lurie today signed legislation approving nearly $1.8 million in new one-time ..."
+  }
+ ]
+}

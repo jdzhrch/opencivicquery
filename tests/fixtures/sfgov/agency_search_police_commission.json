@@ -1,0 +1,21 @@
+{
+ "meta": {
+  "total_count": 1
+ },
+ "items": [
+  {
+   "id": 3005,
+   "meta": {
+    "type": "sf.Agency",
+    "detail_url": "https://api.sf.gov/api/v2/pages/3005/",
+    "html_url": "http://api.sf.gov/departments--police-commission/",
+    "slug": "departments--police-commission",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2024-12-04T13:29:34.158000-08:00",
+    "locale": "en"
+   },
+   "title": "Police Commission"
+  }
+ ]
+}
