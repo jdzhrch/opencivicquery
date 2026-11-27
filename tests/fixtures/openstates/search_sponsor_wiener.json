@@ -1,0 +1,133 @@
+{
+ "results": [
+  {
+   "id": "ocd-bill/d27fe716-966e-426e-802e-bba35afefb21",
+   "session": "20252026",
+   "jurisdiction": {
+    "id": "ocd-jurisdiction/country:us/state:ca/government",
+    "name": "California",
+    "classification": "state"
+   },
+   "from_organization": {
+    "id": "ocd-organization/98623fa0-f9c3-47ae-80bb-51465349ed71",
+    "name": "Senate",
+    "classification": "upper"
+   },
+   "identifier": "SB 607",
+   "title": "Golden Gate Bridge, Highway and Transportation District: contributions and loans.",
+   "classification": [
+    "bill"
+   ],
+   "subject": [
+    "GoldenGateBridge,HighwayandTransportationDistrict",
+    "contributionsandloans"
+   ],
+   "extras": {
+    "tags": [],
+    "impact_clause": "An act to amend Section 27556 of the Streets and Highways Code, relating to transportation."
+   },
+   "created_at": "2025-02-21T06:00:32.929252+00:00",
+   "updated_at": "2026-10-27T21:12:17.911902+00:00",
+   "openstates_url": "https://openstates.org/ca/bills/20252026/SB607/",
+   "first_action_date": "2025-02-20",
+   "latest_action_date": "2026-09-30",
+   "latest_action_description": "Chaptered by Secretary of State. Chapter 972, Statutes of 2026.",
+   "latest_passage_date": "2026-08-06",
+   "sources": [
+    {
+     "url": "http://leginfo.legislature.ca.gov/faces/billNavClient.xhtml?bill_id=202520260SB607",
+     "note": ""
+    }
+   ]
+  },
+  {
+   "id": "ocd-bill/e135d87d-7779-4d97-b36d-bcdd67e22c72",
+   "session": "20252026",
+   "jurisdiction": {
+    "id": "ocd-jurisdiction/country:us/state:ca/government",
+    "name": "California",
+    "classification": "state"
+   },
+   "from_organization": {
+    "id": "ocd-organization/98623fa0-f9c3-47ae-80bb-51465349ed71",
+    "name": "Senate",
+    "classification": "upper"
+   },
+   "identifier": "SB 1361",
+   "title": "Transit-oriented housing developments: local governments: transit agencies and projects.",
+   "classification": [
+    "bill"
+   ],
+   "subject": [
+    "Transit-orientedhousingdevelopments",
+    "localgovernments",
+    "transitagenciesandprojects"
+   ],
+   "extras": {
+    "tags": [],
+    "impact_clause": "An act to amend Section 65912.157 of the Government Code, relating to land use."
+   },
+   "created_at": "2026-02-21T08:59:27.386122+00:00",
+   "updated_at": "2026-11-13T09:23:24.197395+00:00",
+   "openstates_url": "https://openstates.org/ca/bills/20252026/SB1361/",
+   "first_action_date": "2026-02-20",
+   "latest_action_date": "2026-09-30",
+   "latest_action_description": "Chaptered by Secretary of State. Chapter 1027, Statutes of 2026.",
+   "latest_passage_date": "2026-08-27",
+   "sources": [
+    {
+     "url": "http://leginfo.legislature.ca.gov/faces/billNavClient.xhtml?bill_id=202520260SB1361",
+     "note": ""
+    }
+   ]
+  },
+  {
+   "id": "ocd-bill/ee1a0e38-0439-4fa7-bb9b-56867cb5a56e",
+   "session": "20252026",
+   "jurisdiction": {
+    "id": "ocd-jurisdiction/country:us/state:ca/government",
+    "name": "California",
+    "classification": "state"
+   },
+   "from_organization": {
+    "id": "ocd-organization/98623fa0-f9c3-47ae-80bb-51465349ed71",
+    "name": "Senate",
+    "classification": "upper"
+   },
+   "identifier": "SB 1105",
+   "title": "Law enforcement.",
+   "classification": [
+    "bill"
+   ],
+   "subject": [
+    "Lawenforcement"
+   ],
+   "extras": {
+    "tags": [
+     "fiscal committee",
+     "local program"
+    ],
+    "impact_clause": "An act to amend Section 830.8 of, and to add Section 11054.5 to, the Penal Code, relating to law enforcement."
+   },
+   "created_at": "2026-02-14T08:45:18.176565+00:00",
+   "updated_at": "2026-10-29T09:12:20.618411+00:00",
+   "openstates_url": "https://openstates.org/ca/bills/20252026/SB1105/",
+   "first_action_date": "2026-02-13",
+   "latest_action_date": "2026-09-30",
+   "latest_action_description": "In Senate. Consideration of Governor's veto pending.",
+   "latest_passage_date": "2026-08-25",
+   "sources": [
+    {
+     "url": "http://leginfo.legislature.ca.gov/faces/billNavClient.xhtml?bill_id=202520260SB1105",
+     "note": ""
+    }
+   ]
+  }
+ ],
+ "pagination": {
+  "per_page": 3,
+  "page": 1,
+  "max_page": 66,
+  "total_items": 196
+ }
+}

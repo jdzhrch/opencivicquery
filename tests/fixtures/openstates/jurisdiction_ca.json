@@ -1,0 +1,60 @@
+{
+ "id": "ocd-jurisdiction/country:us/state:ca/government",
+ "name": "California",
+ "classification": "state",
+ "division_id": "ocd-division/country:us/state:ca",
+ "url": "http://www.legislature.ca.gov/",
+ "latest_bill_update": "2026-11-27T14:51:36.214309+00:00",
+ "latest_people_update": "2026-10-22T06:17:49.711881+00:00",
+ "legislative_sessions": [
+  {
+   "identifier": "20192020",
+   "name": "2019-2020 Regular Session",
+   "classification": "primary",
+   "start_date": "2018-12-03",
+   "end_date": "2020-09-13"
+  },
+  {
+   "identifier": "20212022",
+   "name": "2021-2022 Regular Session",
+   "classification": "primary",
+   "start_date": "2020-12-07",
+   "end_date": "2021-09-10"
+  },
+  {
+   "identifier": "20232024",
+   "name": "2023-2024 Regular Session",
+   "classification": "primary",
+   "start_date": "2022-12-05",
+   "end_date": "2024-10-01"
+  },
+  {
+   "identifier": "20232024 Special Session 1",
+   "name": "2023-2024, Special Session 1",
+   "classification": "special",
+   "start_date": "2022-12-05",
+   "end_date": "2023-01-04"
+  },
+  {
+   "identifier": "20232024 Special Session 2",
+   "name": "2023-2024, Special Session 2",
+   "classification": "special",
+   "start_date": "2024-09-01",
+   "end_date": "2024-12-05"
+  },
+  {
+   "identifier": "20252026 Special Session 1",
+   "name": "2025-2026, Special Session 1",
+   "classification": "special",
+   "start_date": "2024-12-02",
+   "end_date": "2024-12-02"
+  },
+  {
+   "identifier": "20252026",
+   "name": "2025-2026 Regular Session",
+   "classification": "primary",
+   "start_date": "2024-12-02",
+   "end_date": "2026-11-30"
+  }
+ ]
+}

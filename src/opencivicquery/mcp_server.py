@@ -41,6 +41,9 @@ from opencivicquery.sources.legistar import MAX_LIMIT as LEGISTAR_MAX_LIMIT
 from opencivicquery.sources.legistar import MAX_TEXT_LENGTH as LEGISTAR_MAX_TEXT
 from opencivicquery.sources.nonprofits import MAX_NAME_LENGTH as NONPROFIT_MAX_NAME
 from opencivicquery.sources.nonprofits import NONPROFITS_HOST, NonprofitExplorer
+from opencivicquery.sources.openstates import MAX_SPONSOR_LENGTH as STATE_MAX_SPONSOR
+from opencivicquery.sources.openstates import MAX_TEXT_LENGTH as STATE_MAX_TEXT
+from opencivicquery.sources.openstates import OPENSTATES_HOST, OpenStates
 from opencivicquery.sources.sec_edgar import DEFAULT_LIMIT as SEC_DEFAULT_LIMIT
 from opencivicquery.sources.sec_edgar import MAX_COMPANY_LENGTH, MAX_FORM_TYPES, SecEdgar
 from opencivicquery.sources.sec_edgar import MAX_LIMIT as SEC_MAX_LIMIT
@@ -83,7 +86,9 @@ SERVER_INSTRUCTIONS = (
     "990 filings, call search_nonprofits and then get_nonprofit_filings. For news, meeting "
     "pages, and documents on San Francisco's city website, SF.gov, call find_sfgov_news, "
     "find_sfgov_meetings, and search_sfgov; get_sfgov_page returns the text of one news or "
-    "meeting page. These tools follow the same evidence rules.\n\n"
+    "meeting page. For California state bills, their authors, actions, and how each "
+    "legislator voted, call search_california_bills and get_california_bill. These tools "
+    "follow the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -123,6 +128,7 @@ class AppState:
     census: CensusData | None = None
     nonprofits: NonprofitExplorer | None = None
     sfgov: SfGov | None = None
+    openstates: OpenStates | None = None
     """Record sources that answer through OpenCivicQueryService.lookup. The lifespan
     builds and closes them; None only in tests that never call their tools."""
 
@@ -235,6 +241,13 @@ SFGOV_OPTIONAL_AGENCY_FIELD = Field(
     max_length=SFGOV_MAX_AGENCY,
 )
 
+STATE_SESSION_FIELD = Field(
+    description=(
+        "The legislative session as Open States names it, such as 20252026 for the 2025-2026 "
+        "Regular Session. Omit it for the most recent session."
+    ),
+    max_length=30,
+)
 EVENT_GUID_FIELD = Field(
     description=(
         "The meeting's GUID: the EventGuid that find_meetings or a matter's History "
@@ -455,6 +468,8 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             stack.push_async_callback(state.census.close)
             state.nonprofits = NonprofitExplorer()
             stack.push_async_callback(state.nonprofits.close)
+            state.openstates = OpenStates(api_key=_secret(settings.openstates_api_key))
+            stack.push_async_callback(state.openstates.close)
             # The daily copy sits beside the snapshots. Without one, the tools answer live only.
             state.sfgov = SfGov(
                 copy=CopyReader(
@@ -1279,6 +1294,102 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             arguments=arguments,
             host=SFGOV_HOST,
             prepare=lambda state_: sfgov(state_).get_page(**arguments),
+        )
+
+    def openstates(state: AppState) -> OpenStates:
+        if state.openstates is None:
+            raise RuntimeError("The Open States source was not built")
+        return state.openstates
+
+    @tool(
+        name="search_california_bills",
+        description=(
+            "Search bills and resolutions of the California Legislature, through Open States, "
+            "by words, by the member who sponsored them, or by recent action, in one session. "
+            "Returns Open States' count of matches and the first 20, most recent action "
+            "first, each with its status and a link to the Legislature's page. Same response "
+            "shape and rules as query_dataset."
+        ),
+    )
+    async def search_california_bills(
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        text: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional words to look for, or a bill number such as SB 79, which is "
+                    "matched as that number."
+                ),
+                max_length=STATE_MAX_TEXT,
+            ),
+        ] = None,
+        session: Annotated[str | None, STATE_SESSION_FIELD] = None,
+        sponsor: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional member's name as the Legislature prints it on bills, usually "
+                    "the surname, such as Wiener, or an Open States person id."
+                ),
+                max_length=STATE_MAX_SPONSOR,
+            ),
+        ] = None,
+        role: Annotated[
+            Literal["any", "author"],
+            Field(description="With a sponsor: any includes coauthored bills; author does not."),
+        ] = "any",
+        action_since: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional YYYY-MM-DD: keep bills whose latest action is on or after it."
+                ),
+                max_length=10,
+            ),
+        ] = None,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {
+            "text": text,
+            "session": session,
+            "sponsor": sponsor,
+            "role": role,
+            "action_since": action_since,
+        }
+        return await run_lookup(
+            ctx,
+            action="search_california_bills",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=OPENSTATES_HOST,
+            prepare=lambda state_: openstates(state_).search_bills(**arguments),
+        )
+
+    @tool(
+        name="get_california_bill",
+        description=(
+            "Read one California bill or resolution through Open States: its authors and "
+            "coauthors, every recorded action, and each roll call with its tally and how each "
+            "member voted. Same response shape and rules as query_dataset."
+        ),
+    )
+    async def get_california_bill(
+        bill: Annotated[
+            str,
+            Field(description="The measure number, such as SB 79 or AB 1.", max_length=12),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        session: Annotated[str | None, STATE_SESSION_FIELD] = None,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"bill": bill, "session": session}
+        return await run_lookup(
+            ctx,
+            action="get_california_bill",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=OPENSTATES_HOST,
+            prepare=lambda state_: openstates(state_).get_bill(**arguments),
         )
 
     def census(state: AppState) -> CensusData:

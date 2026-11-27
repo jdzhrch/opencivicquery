@@ -112,6 +112,8 @@ def test_skill_mentions_only_tools_the_server_offers() -> None:
         "query_url",
         "event_id",
         "event_guid",
+        "action_since",
+        "leginfo_url",
     }
 
     assert tools == {
@@ -133,6 +135,8 @@ def test_skill_mentions_only_tools_the_server_offers() -> None:
         "find_sfgov_meetings",
         "search_sfgov",
         "get_sfgov_page",
+        "search_california_bills",
+        "get_california_bill",
         "get_census_data",
         "pin_snapshot",
         "get_snapshot",

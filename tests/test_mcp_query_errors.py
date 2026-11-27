@@ -19,6 +19,7 @@ from opencivicquery.models import QueryResponse
 from opencivicquery.snapshots import FileSnapshotStore, SnapshotError
 from opencivicquery.sources.census_geocoder import CensusGeocoder
 from opencivicquery.sources.legistar import Legistar
+from opencivicquery.sources.openstates import OpenStates
 from opencivicquery.sources.sec_edgar import SecEdgar
 from opencivicquery.sources.sfgov import SfGov
 from opencivicquery.sources.socrata import SocrataError, SocrataNetwork
@@ -1719,3 +1720,92 @@ async def test_an_unanswering_sfgov_answers_from_the_daily_copy_over_mcp(
     assert "SFGOV_DAILY_COPY" in events[0]["presentation_escalations"]
     assert events[1]["status"] == "error" and events[1]["error_type"] == "NOT_FOUND"
     assert events[2]["action"] == "get_sfgov_page" and events[2]["arguments"] == {"page_id": 110692}
+
+
+OPENSTATES_FIXTURES = Path(__file__).parent / "fixtures" / "openstates"
+OPENSTATES_KEY = "test-openstates-key-0123"
+
+
+@pytest.mark.asyncio
+async def test_california_bill_tools_return_evidence_without_the_key_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        name = (
+            "jurisdiction_ca"
+            if path.startswith("/jurisdictions/")
+            else "search_sponsor_wiener"
+            if path == "/bills"
+            else "bill_sb79"
+        )
+        return httpx.Response(
+            200, json=json.loads((OPENSTATES_FIXTURES / f"{name}.json").read_text())
+        )
+
+    states_client = httpx.AsyncClient(transport=httpx.MockTransport(recorded))
+    monkeypatch.setattr(
+        mcp_server,
+        "OpenStates",
+        lambda **kwargs: OpenStates(client=states_client, **kwargs),
+    )
+    server, http_client, _, logger_name = build_test_server(
+        monkeypatch,
+        write_deployment,
+        tmp_path,
+        settings_overrides={"openstates_api_key": OPENSTATES_KEY},
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    try:
+        async with Client(server, mode="legacy") as client:
+            search = await client.call_tool(
+                "search_california_bills",
+                {
+                    "sponsor": "Wiener",
+                    "role": "author",
+                    "reporter_question": "What has Wiener authored?",
+                },
+            )
+            bill = await client.call_tool(
+                "get_california_bill",
+                {"bill": "sb 79", "reporter_question": "How did the Assembly vote on SB 79?"},
+            )
+            refused = await client.call_tool(
+                "get_california_bill", {"bill": "Prop 50", "reporter_question": "Prop 50?"}
+            )
+    finally:
+        await http_client.aclose()
+        await states_client.aclose()
+
+    for result in (search, bill):
+        assert result.is_error is False
+        payload = result.structured_content
+        QueryResponse.model_validate(payload)
+        assert payload["domain"] == "v3.openstates.org"
+        assert payload["query_url"] is None
+        assert payload["source_updated_at"] == "2026-11-27T14:51:36.214309+00:00"
+        assert payload["presentation_rules"]
+    assert refused.is_error is True
+    assert bill.structured_content["rows"][0]["identifier"] == "SB 79"
+    assert search.structured_content["completeness"] == "truncated"
+    snapshots = list((tmp_path / "snapshots").rglob("*.json"))
+    assert snapshots
+    assert all(OPENSTATES_KEY not in path.read_text() for path in snapshots)
+    assert OPENSTATES_KEY not in caplog.text
+    assert all(OPENSTATES_KEY not in str(request.url) for request in requests)
+    events = audit_events(caplog, logger_name)
+    assert [event["action"] for event in events] == [
+        "search_california_bills",
+        "get_california_bill",
+        "get_california_bill",
+    ]
+    assert events[1]["arguments"] == {"bill": "SB 79", "session": None}
+    assert events[2]["status"] == "error"
+    # One session list for both lookups, then the search and the bill.
+    assert len(requests) == 3
