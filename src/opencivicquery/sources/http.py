@@ -8,7 +8,12 @@ from typing import Any
 import httpx
 
 from opencivicquery import DEFAULT_USER_AGENT
-from opencivicquery.sources.base import SourceError, SourceQueryError
+from opencivicquery.sources.base import (
+    SourceAnswerNotJson,
+    SourceError,
+    SourceQueryError,
+    SourceUnreachable,
+)
 
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
@@ -103,6 +108,9 @@ class FixedHostClient:
                 code="SOURCE_TIMEOUT",
                 public_message=f"The {self.source_name} did not answer in time. Try again.",
             ) from exc
+        except (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError) as exc:
+            # The connection failed or broke off: the source could not be reached.
+            raise SourceUnreachable(f"The {self.source_name} request failed") from exc
         except httpx.RequestError as exc:
             raise SourceError(f"The {self.source_name} request failed") from exc
 
@@ -127,7 +135,9 @@ class FixedHostClient:
             payload = None
         if status == 200:
             if payload is None:
-                raise SourceError(f"The {self.source_name} returned a body that is not JSON")
+                raise SourceAnswerNotJson(
+                    f"The {self.source_name} returned a body that is not JSON"
+                )
             return payload
         detail = source_reason(payload)
         raise SourceQueryError(

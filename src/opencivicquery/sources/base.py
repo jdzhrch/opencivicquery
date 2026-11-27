@@ -16,6 +16,14 @@ class SourceError(RuntimeError):
     """A data source returned an invalid or unsuccessful response."""
 
 
+class SourceUnreachable(SourceError):
+    """The request never got an answer: the connection failed before any response."""
+
+
+class SourceAnswerNotJson(SourceError):
+    """A source that answers in JSON sent something else with HTTP 200."""
+
+
 class SourceQueryError(SourceError):
     """An expected failure with a safe diagnostic for the MCP caller."""
 

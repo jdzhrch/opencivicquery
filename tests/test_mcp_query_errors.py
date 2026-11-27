@@ -1325,7 +1325,11 @@ def patch_sfgov(
         return (route or recorded)(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(mcp_server, "SfGov", lambda: SfGov(client=client, min_request_interval=0))
+    monkeypatch.setattr(
+        mcp_server,
+        "SfGov",
+        lambda **kwargs: SfGov(client=client, min_request_interval=0, **kwargs),
+    )
     return client, requests
 
 
@@ -1601,3 +1605,109 @@ async def test_an_sfgov_outage_is_a_tool_error_after_one_request(
     assert "HTTP 503" in down.structured_content["error"]["message"]
     assert len(sfgov_requests) == 1
     assert not list((tmp_path / "snapshots").rglob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_an_unanswering_sfgov_answers_from_the_daily_copy_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from datetime import UTC, date, datetime
+
+    from opencivicquery.sources.sfgov_copy import (
+        CopyAgency,
+        CopyNews,
+        LocalCopyStore,
+        SfGovCopy,
+        encode_copy,
+    )
+
+    taken = datetime(2026, 11, 27, 11, 0, tzinfo=UTC)
+    daily = SfGovCopy(
+        copied_at=taken,
+        agencies=[
+            CopyAgency(
+                page_id=559,
+                title="Office of the Mayor",
+                page_url="https://www.sf.gov/departments--office-mayor",
+                copied_at=taken,
+                news_total=1,
+                meetings_total=0,
+                news_complete=True,
+                meetings_complete=True,
+            )
+        ],
+        news=[
+            CopyNews(
+                page_id=110692,
+                agency_id=559,
+                date=date(2026, 11, 24),
+                title="Mayor Lurie Signs Legislation Increasing Relocation Payments",
+                news_type="news",
+                abstract="Raises Required Ellis Act Payments by 25%",
+                page_url="https://www.sf.gov/news-mayor-lurie-signs-legislation",
+                text="SAN FRANCISCO - Mayor Daniel Lurie today signed legislation.",
+            )
+        ],
+        meetings=[],
+        documents=[],
+    )
+    await LocalCopyStore(tmp_path / "snapshots").write(encode_copy(daily))
+    sfgov_client, sfgov_requests = patch_sfgov(monkeypatch, lambda _: httpx.Response(202))
+    server, http_client, _, logger_name = build_test_server(monkeypatch, write_deployment, tmp_path)
+    caplog.set_level(logging.INFO, logger=logger_name)
+    question = {"reporter_question": "What did the Mayor announce this week?"}
+    try:
+        async with Client(server, mode="legacy") as client:
+            news = await client.call_tool(
+                "find_sfgov_news",
+                question
+                | {
+                    "agency": "Office of the Mayor",
+                    "start_date": "2026-11-20",
+                    "end_date": "2026-11-26",
+                },
+            )
+            outside = await client.call_tool(
+                "find_sfgov_meetings",
+                question
+                | {
+                    "agency": "Police Commission",
+                    "start_date": "2026-11-01",
+                    "end_date": "2026-11-30",
+                },
+            )
+            stored = await client.call_tool(
+                "get_snapshot", {"snapshot_uri": news.structured_content["snapshot"]["uri"]}
+            )
+    finally:
+        await http_client.aclose()
+        await sfgov_client.aclose()
+
+    assert news.is_error is False
+    payload = news.structured_content
+    QueryResponse.model_validate(payload)
+    assert [row["page_id"] for row in payload["rows"]] == [110692]
+    assert "text" not in payload["rows"][0]
+    assert payload["completeness"] == "limited"
+    assert payload["query_url"] is None
+    assert payload["source_updated_at"] == taken.isoformat()
+    assert payload["warnings"][0].startswith("FROM THE DAILY COPY.")
+    assert payload["presentation_rules"][0].startswith("FROM A DAILY COPY, NOT LIVE.")
+    assert any(
+        rule.startswith("End your reply with this sentence")
+        for rule in payload["presentation_rules"]
+    )
+    assert "COMPLETENESS IS LIMITED" in " ".join(payload["presentation_rules"])
+    assert stored.structured_content["rows"] == payload["rows"]
+    assert outside.is_error is True
+    error = outside.structured_content["error"]
+    assert error["code"] == "NOT_FOUND" and "covers only these agencies" in error["message"]
+    # One request without data; every later call in the hour goes straight to the copy.
+    assert len(sfgov_requests) == 1
+    events = [event for event in audit_events(caplog, logger_name) if "sfgov" in event["action"]]
+    assert events[0]["status"] == "success"
+    assert "SFGOV_DAILY_COPY" in events[0]["presentation_escalations"]
+    assert events[1]["status"] == "error" and events[1]["error_type"] == "NOT_FOUND"

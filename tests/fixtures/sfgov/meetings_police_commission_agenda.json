@@ -1,0 +1,275 @@
+{
+ "meta": {
+  "total_count": 200
+ },
+ "items": [
+  {
+   "id": 110632,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/110632/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--december-2-2026--december-2-2026-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--december-2-2026--december-2-2026-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-05-01T13:04:49.448000-07:00",
+    "locale": "en"
+   },
+   "title": "December 2, 2026 Police Commission meeting",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2026-12-02",
+      "start_time": "17:30:00",
+      "end_date": null,
+      "end_time": null,
+      "include_end_date_time": "no"
+     },
+     "id": "afff1abc-9a69-4b2a-a6e4-fb4de94e7325"
+    }
+   ],
+   "overview": "",
+   "agenda": [
+    {
+     "type": "agenda_item",
+     "value": {
+      "title_and_text": {
+       "title": "General Public Comment",
+       "text": "<p data-block-key=\"mdh5y\">(The public is now welcome to address the Commission regarding items that do not appear on tonight’s agenda but that are within the su [trimmed]"
+      },
+      "documents": []
+     },
+     "id": "0deaa709-6f33-406f-bacb-e91047a58f34"
+    },
+    {
+     "type": "agenda_item",
+     "value": {
+      "title_and_text": {
+       "title": "Consent Calendar (RECEIVE & FILE; ACTION)",
+       "text": "<p data-block-key=\"fl795\">- SFPD’s and DPA’s Document Protocol Report, 3rd Quarter 2026</p><p data-block-key=\"bmvf8\">- Third Quarter 2026 Report per Chapter 96A [trimmed]"
+      },
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 71015,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/71015/PoliceCommission12226-_SFPD_3rd_Quarter_Document_Protocol.pdf"
+         },
+         "title": "SFPD 3rd Q Document Protocol",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission12226-_SFPD_3rd_Quarter_Document_Protocol.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2026-11-24T19:22:09.412311-08:00"
+        },
+        "id": "1d6d1637-7803-4f0b-b9d2-5f875051936b"
+       },
+       {
+        "type": "document",
+        "value": {
+         "id": 71016,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/71016/PoliceCommission12226-_DPA_3Q_2026_Document_Protocol.pdf"
+         },
+         "title": "DPA 3rd Q 2026 Document Protocol",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission12226-_DPA_3Q_2026_Document_Protocol.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2026-11-24T19:22:41.533257-08:00"
+        },
+        "id": "8534987b-cfa1-48ad-80ac-a0bd165ddd4a"
+       }
+      ]
+     },
+     "id": "5cf0cb19-4542-4071-b4c9-08dc73b7ce46"
+    },
+    {
+     "type": "agenda_item",
+     "value": {
+      "title_and_text": {
+       "title": "Adoption of Minutes (ACTION)",
+       "text": "<p data-block-key=\"8sqwb\">- For the meetings of October 7th, October 14th, October 21st and November 18th, 2026</p>"
+      },
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 71018,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/71018/PoliceCommission12226-_Oct_7_2026_in-person.pdf"
+         },
+         "title": "Oct 7 Mins",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission12226-_Oct_7_2026_in-person.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2026-11-24T19:23:40.327736-08:00"
+        },
+        "id": "75e84f6f-175a-437e-a605-a7b6cf996b8b"
+       },
+       {
+        "type": "document",
+        "value": {
+         "id": 71019,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/71019/PoliceCommission12226-_Oct_14_2026_in-person.pdf"
+         },
+         "title": "Oct 14 Mins",
+         "file": "https://media.api.sf.gov/documents/PoliceCommission12226-_Oct_14_2026_in-person.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2026-11-24T19:24:03.161934-08:00"
+        },
+        "id": "776b8b85-40bb-47d3-b549-5a4d05b28338"
+       }
+      ]
+     },
+     "id": "781feb55-bdbc-4321-8d71-8a2cacecfd0c"
+    }
+   ],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 108949,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/108949/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--november-4-2026--november-4-2026-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--november-4-2026--november-4-2026-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2025-11-21T12:19:46.977000-08:00",
+    "locale": "en"
+   },
+   "title": "November 4, 2026 - Special Meeting - SFPD Annual Medal of Valor Awards",
+   "cancelled": false,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2026-11-04",
+      "start_time": "18:00:00",
+      "end_date": "2025-12-03",
+      "end_time": "21:00:00",
+      "include_end_date_time": "no"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "overview": "<p data-block-key=\"s8upg\">The Police Commission will not hold a Regular Meeting on Wednesday, November 4, 2026, instead the Police Commission Office will hold t [trimmed]",
+   "agenda": [
+    {
+     "type": "agenda_item",
+     "value": {
+      "title_and_text": {
+       "title": "Medal of Valor Awards Program",
+       "text": ""
+      },
+      "documents": [
+       {
+        "type": "document",
+        "value": {
+         "id": 64995,
+         "meta": {
+          "type": "cms.BaseDocument",
+          "download_url": "https://api.sf.gov/documents/64995/Awards_Program_-_November_4_2026.pdf"
+         },
+         "title": "Medal of Valor Awards Program - November 4 2026",
+         "file": "https://media.api.sf.gov/documents/Awards_Program_-_November_4_2026.pdf",
+         "description": "",
+         "published_date": null,
+         "tags": [],
+         "collection": {
+          "id": 1,
+          "meta": {
+           "type": "wagtailcore.Collection"
+          },
+          "name": "Root"
+         },
+         "created_at": "2026-10-26T10:04:13.624165-07:00"
+        },
+        "id": "70bfd62c-acb0-4682-9221-521266c4366b"
+       }
+      ]
+     },
+     "id": "896ecafe-e95c-464f-b876-908dd615a376"
+    }
+   ],
+   "videos": [],
+   "related_documents": []
+  },
+  {
+   "id": 103689,
+   "meta": {
+    "type": "sf.Meeting",
+    "detail_url": "https://api.sf.gov/api/v2/pages/103689/",
+    "html_url": "http://api.sf.gov/httpswwwsfgovhttpswwwsfgovmeeting--august-19-2026--august-19-2026-police-commission-meeting/",
+    "slug": "httpswwwsfgovhttpswwwsfgovmeeting--august-19-2026--august-19-2026-police-commission-meeting",
+    "seo_title": "",
+    "search_description": "",
+    "first_published_at": "2026-05-13T11:02:13.279000-07:00",
+    "locale": "en"
+   },
+   "title": "August 19, 2026 Police Commission meeting",
+   "cancelled": true,
+   "date_time": [
+    {
+     "type": "date_time",
+     "value": {
+      "is_all_day": false,
+      "start_date": "2026-08-19",
+      "start_time": "17:30:00",
+      "end_date": "2026-01-07",
+      "end_time": "17:30:00",
+      "include_end_date_time": "no"
+     },
+     "id": "c6ae76c8-97f1-4111-8f5a-efe2c793f508"
+    }
+   ],
+   "overview": "<p data-block-key=\"lai8l\"></p><p data-block-key=\"8bdof\">The Police Commission will be in recess for the month of August.</p><p data-block-key=\"4o6s2\">The Police [trimmed]",
+   "agenda": [],
+   "videos": [],
+   "related_documents": []
+  }
+ ]
+}

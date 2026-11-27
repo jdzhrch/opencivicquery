@@ -1,0 +1,29 @@
+{
+ "id": 110692,
+ "meta": {
+  "type": "sf.News",
+  "detail_url": "https://api.sf.gov/api/v2/pages/110692/",
+  "html_url": "http://api.sf.gov/news-mayor-lurie-signs-legislation-increasing-relocation-payments-for-displaced-renters/",
+  "slug": "news-mayor-lurie-signs-legislation-increasing-relocation-payments-for-displaced-renters",
+  "first_published_at": "2026-11-24T13:14:49.985346-08:00",
+  "locale": "en"
+ },
+ "title": "Mayor Lurie Signs Legislation Increasing Relocation Payments for Displaced Renters",
+ "primary_agency": {
+  "id": 559,
+  "meta": {
+   "type": "sf.Agency",
+   "detail_url": "https://api.sf.gov/api/v2/pages/559/",
+   "html_url": "http://api.sf.gov/departments--office-mayor/",
+   "slug": "departments--office-mayor",
+   "seo_title": "",
+   "search_description": ""
+  },
+  "title": "Office of the Mayor"
+ },
+ "date": "2026-11-24",
+ "abstract": "Raises Required Ellis Act Payments by 25%, Nearly $3,000 per Tenant, to Reflect Rising Cost of Finding a New Home in San Francisco; Part of Mayor Lurie's Rent Emergency Package, Builds on Work Under Administration’s Family Opportunity Agenda",
+ "body": "<p data-block-key=\"oqkrh\"><b>SAN FRANCISCO</b> – Mayor Daniel Lurie today signed legislation increasing the payments landlords must make to tenants displaced under the Ellis Act by 25%, nearly $3,000 per person, to better reflect the cost of finding a new apartment in San Francisco. The legislation, which Mayor Lurie sponsored, is part of the <a href=\"https://www.sf.gov/news-mayor-lurie-unveils-sweeping-package-with-immediate-actions-to-address-san-franciscos-rent-emergency\">rent emergency package</a> he announced in September to protect against unwarranted evictions and prevent sudden rent spikes.</p><p data-block-key=\"23on\">The new law builds on Mayor Lurie’s <a href=\"https://www.sf.gov/news-mayor-lurie-launches-family-opportunity-agenda-to-make-san-francisco-more-affordable-for-families\">Family Opportunity Agenda</a> and his administration’s work to help people put down roots in San F</p>",
+ "news_type": "news",
+ "partner_agencies": []
+}

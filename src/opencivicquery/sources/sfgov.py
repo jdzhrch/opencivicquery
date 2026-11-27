@@ -24,14 +24,24 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 
 from opencivicquery.models import Completeness, SourceQueryResult, normalize_domain
-from opencivicquery.sources.base import Lookup, PreparedLookup, SourceError, SourceQueryError
+from opencivicquery.sources.base import (
+    Lookup,
+    PreparedLookup,
+    SourceAnswerNotJson,
+    SourceError,
+    SourceQueryError,
+    SourceUnreachable,
+)
 from opencivicquery.sources.http import FixedHostClient
+
+if TYPE_CHECKING:
+    from opencivicquery.sources.sfgov_copy import CopyReader
 
 SFGOV_HOST = "api.sf.gov"
 PUBLIC_SITE = "https://www.sf.gov"
@@ -48,6 +58,10 @@ MIN_REQUEST_INTERVAL_SECONDS = 1.0
 RATE_LIMIT_PAUSE_SECONDS = 60.0
 # Our own bound: after the site answers HTTP 429, this process sends it nothing for a
 # minute and refuses lookups in that time. The request is never retried.
+LIVE_RETRY_SECONDS = 3600.0
+# Our own bound: when the site answers with HTTP 202 or 403 instead of data and the daily
+# copy answers in its place, the process uses the copy for an hour without contacting the
+# site, then tries the site again.
 QUEUE_WAIT_SECONDS = 20.0
 # Our own bound: a lookup waits this long for the lookups ahead of it in this process and
 # is then refused before it sends anything. Without it a lookup could leave the queue late,
@@ -656,6 +670,106 @@ class _Meeting:
     unread: int
 
 
+def _item_id(item: dict[str, Any]) -> int | None:
+    """A list item's page id. News items carry it inside meta, other pages at the top."""
+    top = _integer(item.get("id"))
+    if top is not None:
+        return top
+    meta = item.get("meta")
+    return _integer(meta.get("id")) if isinstance(meta, dict) else None
+
+
+def _filter_meetings(
+    meetings: list[_Meeting], first: date, last: date
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Rows of the pages whose dates reach into the range, newest first, then undated pages.
+
+    Returns the dated rows, the undated rows, and the unread attachment entries among them.
+    """
+    dated: list[tuple[date, str, dict[str, Any]]] = []
+    undated: list[dict[str, Any]] = []
+    unread = 0
+    for meeting in meetings:
+        if not meeting.dates:
+            undated.append(meeting.row)
+            unread += meeting.unread
+            continue
+        inside = [span for span in meeting.dates if span.start <= last and span.end >= first]
+        if not inside:
+            continue
+        shown = inside[0]
+        row = meeting.row | {
+            "meeting_date": shown.start.isoformat(),
+            "end_date": shown.end.isoformat() if shown.end > shown.start else None,
+            "start_time": shown.start_time,
+            "other_dates": [span.start.isoformat() for span in meeting.dates if span is not shown],
+        }
+        dated.append((shown.start, shown.start_time or "", row))
+        unread += meeting.unread
+    dated.sort(key=lambda entry: (entry[0], entry[1], entry[2]["page_id"]), reverse=True)
+    return [row for _, _, row in dated], undated, unread
+
+
+def _meeting_warnings(
+    dated: list[dict[str, Any]], undated: list[dict[str, Any]], unread: int
+) -> list[str]:
+    """The warnings every meeting answer carries, after any warning about a partial read."""
+    warnings = [] if dated else [NO_MEETINGS_WARNING]
+    if undated:
+        warnings.append(
+            f"{len(undated)} meeting page(s) of this body carry no date this lookup "
+            "could read, so they could not be placed inside or outside these dates. "
+            "They are listed last with meeting_date empty. Do not count them as "
+            "meetings in the range."
+        )
+    if unread:
+        warnings.append(
+            f"{unread} attachment or video entr{'y' if unread == 1 else 'ies'} on "
+            "these pages had a form this lookup does not read and are missing from "
+            "documents or video_links. Open the meeting page for the full list."
+        )
+    if any(row["end_date"] for row in dated):
+        warnings.append(MEETING_SPAN_WARNING)
+    return warnings + [
+        MEETING_DOCUMENTS_WARNING,
+        MEETING_AGENDA_WARNING,
+        MEETING_CANCELLED_WARNING,
+        MEETING_VIDEO_WARNING,
+        MEETING_BODY_WARNING,
+        ENGLISH_ONLY_WARNING,
+        UNDOCUMENTED_WARNING,
+    ]
+
+
+def _unreachable(error: SourceError) -> bool:
+    """Whether a live failure means the site could not be reached, as opposed to a bad request
+    or a malformed answer. Only these failures turn to the daily copy. This interface answers
+    only in JSON, so a page of another kind with HTTP 200 counts as no answer."""
+    if isinstance(error, SourceUnreachable | SourceAnswerNotJson):
+        return True
+    if not isinstance(error, SourceQueryError):
+        return False
+    if error.code in {"SOURCE_TIMEOUT", "SOURCE_RATE_LIMITED"}:
+        return True
+    status = error.http_status
+    return (
+        error.code == "SOURCE_UNAVAILABLE"
+        and status is not None
+        and (status in {202, 403} or status >= 500)
+    )
+
+
+def _no_copy() -> SourceQueryError:
+    return SourceQueryError(
+        f"{SOURCE_NAME} unreachable and no daily copy",
+        code="SOURCE_UNAVAILABLE",
+        public_message=(
+            "SF.gov could not be reached from this server, and no daily copy of it is "
+            "available here. Try again later."
+        ),
+    )
+
+
 def _meeting(item: dict[str, Any]) -> _Meeting:
     meta = item.get("meta")
     page_id = _integer(item.get("id"))
@@ -730,7 +844,11 @@ def _document_search_row(item: dict[str, Any]) -> dict[str, Any]:
 
 
 class SfGov:
-    """List SF.gov news and meeting pages and search SF.gov titles."""
+    """List SF.gov news and meeting pages and search SF.gov titles.
+
+    Given a daily copy, a lookup that cannot reach the site answers from the copy instead,
+    and says so in its warnings and rules.
+    """
 
     host = SFGOV_HOST
 
@@ -741,14 +859,18 @@ class SfGov:
         min_request_interval: float = MIN_REQUEST_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        copy: CopyReader | None = None,
     ) -> None:
         self._http = FixedHostClient(source_name=SOURCE_NAME, client=client)
         self._min_interval = min_request_interval
         self._clock = clock
         self._sleep = sleep
+        self._copy = copy
         self._next_start = 0.0
         self._paused_until = 0.0
+        self._live_skip_until = 0.0
         self._lookup_lock = asyncio.Lock()
+        self.requests_sent = 0
 
     def _one_at_a_time(
         self, run: Callable[[], Awaitable[Lookup]]
@@ -772,8 +894,50 @@ class SfGov:
 
         return queued
 
+    def _with_copy(
+        self,
+        live: Callable[[], Awaitable[Lookup]],
+        from_copy: Callable[[CopyReader], Awaitable[Lookup | None]],
+    ) -> Callable[[], Awaitable[Lookup]]:
+        """Try the site; when it cannot be reached and a daily copy exists, answer from it."""
+
+        async def run() -> Lookup:
+            if self._copy is not None and self._live_skipped():
+                answer = await from_copy(self._copy)
+                if answer is not None:
+                    return answer
+                left = self._paused_until - self._clock()
+                if left > 0:
+                    raise _paused(left)
+                # No copy to answer from: try the site again rather than refuse.
+                self._live_skip_until = 0.0
+            try:
+                return await live()
+            except SourceError as exc:
+                if self._copy is None or not _unreachable(exc):
+                    raise
+                answer = await from_copy(self._copy)
+                if answer is None:
+                    raise
+                status = getattr(exc, "http_status", None)
+                if status in {202, 403} or isinstance(exc, SourceAnswerNotJson):
+                    # The copy answered in the site's place, so leave the site alone a while.
+                    self._live_skip_until = self._clock() + LIVE_RETRY_SECONDS
+                return answer
+
+        return self._one_at_a_time(run)
+
+    def _live_skipped(self) -> bool:
+        now = self._clock()
+        return now < self._paused_until or now < self._live_skip_until
+
     def _refuse_while_paused(self) -> None:
-        """Refuse a lookup before it costs an allowance while the pause after a 429 runs."""
+        """Refuse a lookup before it costs an allowance while the pause after a 429 runs.
+
+        A process that holds a daily copy answers from the copy instead, so it refuses nothing.
+        """
+        if self._copy is not None and self._copy.has_copy:
+            return
         left = self._paused_until - self._clock()
         if left > 0:
             raise _paused(left)
@@ -783,10 +947,13 @@ class SfGov:
 
         Nothing is sent while the pause that follows an HTTP 429 is running.
         """
-        self._refuse_while_paused()
+        left = self._paused_until - self._clock()
+        if left > 0:
+            raise _paused(left)
         wait = self._next_start - self._clock()
         if wait > 0:
             await self._sleep(wait)
+        self.requests_sent += 1
         try:
             payload = await self._http.json("GET", url, params=params)
             # A lone surrogate from a JSON escape would fail later, when the snapshot is
@@ -802,6 +969,43 @@ class SfGov:
         finally:
             self._next_start = self._clock() + self._min_interval
         return payload
+
+    async def _read_all(
+        self, params: dict[str, str], what: str, *, max_pages: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Read a list request by request, newest id first, until all items are in.
+
+        Each request after the first starts on the last item already read. If that item is
+        not where it was, the list moved and the read is void. Returns the items read and
+        the total the site reported; fewer items than the total means the page cap was hit.
+        """
+        items: list[dict[str, Any]] = []
+        total = 0
+        for page in range(max_pages):
+            offset = {"offset": str(len(items) - 1)} if items else {}
+            batch, count = _listing(await self._get(PAGES_URL, params | offset), what)
+            if page and (count != total or not batch or _item_id(batch[0]) != _item_id(items[-1])):
+                raise SourceQueryError(
+                    f"The {SOURCE_NAME} {what} changed while it was read",
+                    code="SOURCE_UNAVAILABLE",
+                    public_message=(
+                        f"SF.gov's {what} changed while it was read, so the result could "
+                        "not be trusted. Try again."
+                    ),
+                )
+            total = count
+            fresh = batch[1:] if page else batch
+            items.extend(fresh)
+            if len(items) >= total:
+                break
+            if not fresh:
+                raise SourceError(f"The {SOURCE_NAME} returned an empty page of a {what}")
+        ids = [_item_id(item) for item in items]
+        if None in ids or any(
+            later >= earlier for earlier, later in zip(ids, ids[1:], strict=False)
+        ):
+            raise SourceError(f"The {SOURCE_NAME} returned a {what} out of id order")
+        return items, total
 
     async def _agency(self, name: str) -> _Agency:
         """Return the one agency page titled exactly as named, or raise with candidates.
@@ -881,7 +1085,7 @@ class SfGov:
         name = None if blank else validate_agency(agency)
         self._refuse_while_paused()
 
-        async def run() -> Lookup:
+        async def live() -> Lookup:
             found = await self._agency(name) if name is not None else None
             params = {"type": "sf.News", "locale": "en"}
             if found is not None:
@@ -941,7 +1145,7 @@ class SfGov:
                 "start_date": first.isoformat(),
                 "end_date": last.isoformat(),
             },
-            run=self._one_at_a_time(run),
+            run=self._with_copy(live, lambda copy: copy.news(name=name, first=first, last=last)),
         )
 
     def find_meetings(self, *, agency: str, start_date: str, end_date: str) -> PreparedLookup:
@@ -950,7 +1154,7 @@ class SfGov:
         first, last = _date_range(start_date, end_date)
         self._refuse_while_paused()
 
-        async def run() -> Lookup:
+        async def live() -> Lookup:
             found = await self._agency(name)
             params = {
                 "type": "sf.Meeting",
@@ -964,64 +1168,13 @@ class SfGov:
             # return pages in date order, and the interface refused a range filter on the
             # news date (date__gte). So the lookup reads the body's pages newest id first
             # and keeps the ones dated in the range.
-            items: list[dict[str, Any]] = []
-            total = 0
-            for page in range(MAX_MEETING_PAGES):
-                # Each request after the first starts on the last page already read. If
-                # that page is not where it was, the list moved and the read is void.
-                offset = {"offset": str(len(items) - 1)} if items else {}
-                batch, count = _listing(await self._get(PAGES_URL, params | offset), "meeting list")
-                if page and (
-                    count != total or not batch or batch[0].get("id") != items[-1].get("id")
-                ):
-                    raise SourceQueryError(
-                        f"The {SOURCE_NAME} meeting list changed while it was read",
-                        code="SOURCE_UNAVAILABLE",
-                        public_message=(
-                            "SF.gov's list of meeting pages changed while it was read, so "
-                            "the result could not be trusted. Try again."
-                        ),
-                    )
-                total = count
-                fresh = batch[1:] if page else batch
-                items.extend(fresh)
-                if len(items) >= total:
-                    break
-                if not fresh:
-                    raise SourceError(f"The {SOURCE_NAME} returned an empty page of a meeting list")
+            items, total = await self._read_all(
+                params, "list of meeting pages", max_pages=MAX_MEETING_PAGES
+            )
             meetings = [_meeting(item) for item in items]
-            ids = [meeting.row["page_id"] for meeting in meetings]
-            if any(later >= earlier for earlier, later in zip(ids, ids[1:], strict=False)):
-                raise SourceError(f"The {SOURCE_NAME} returned meeting pages out of id order")
             complete = len(meetings) == total
-
-            dated: list[tuple[date, str, dict[str, Any]]] = []
-            undated: list[dict[str, Any]] = []
-            unread = 0
-            for meeting in meetings:
-                if not meeting.dates:
-                    undated.append(meeting.row)
-                    unread += meeting.unread
-                    continue
-                inside = [
-                    span for span in meeting.dates if span.start <= last and span.end >= first
-                ]
-                if not inside:
-                    continue
-                shown = inside[0]
-                row = meeting.row | {
-                    "meeting_date": shown.start.isoformat(),
-                    "end_date": shown.end.isoformat() if shown.end > shown.start else None,
-                    "start_time": shown.start_time,
-                    "other_dates": [
-                        span.start.isoformat() for span in meeting.dates if span is not shown
-                    ],
-                }
-                dated.append((shown.start, shown.start_time or "", row))
-                unread += meeting.unread
-            dated.sort(key=lambda entry: (entry[0], entry[1], entry[2]["page_id"]), reverse=True)
-            rows = [row for _, _, row in dated] + undated
-
+            dated, undated, unread = _filter_meetings(meetings, first, last)
+            rows = dated + undated
             result = SourceQueryResult(
                 dataset_id="pages/sf.Meeting",
                 dataset_name=(
@@ -1050,32 +1203,7 @@ class SfGov:
                     "does not sort them by meeting date, so a meeting in these dates can be "
                     "missing from this result. Check the body's page on SF.gov."
                 )
-            if not dated:
-                warnings.append(NO_MEETINGS_WARNING)
-            if undated:
-                warnings.append(
-                    f"{len(undated)} meeting page(s) of this body carry no date this lookup "
-                    "could read, so they could not be placed inside or outside these dates. "
-                    "They are listed last with meeting_date empty. Do not count them as "
-                    "meetings in the range."
-                )
-            if unread:
-                warnings.append(
-                    f"{unread} attachment or video entr{'y' if unread == 1 else 'ies'} on "
-                    "these pages had a form this lookup does not read and are missing from "
-                    "documents or video_links. Open the meeting page for the full list."
-                )
-            if any(row["end_date"] for row in rows):
-                warnings.append(MEETING_SPAN_WARNING)
-            warnings += [
-                MEETING_DOCUMENTS_WARNING,
-                MEETING_AGENDA_WARNING,
-                MEETING_CANCELLED_WARNING,
-                MEETING_VIDEO_WARNING,
-                MEETING_BODY_WARNING,
-                ENGLISH_ONLY_WARNING,
-                UNDOCUMENTED_WARNING,
-            ]
+            warnings += _meeting_warnings(dated, undated, unread)
             return Lookup(
                 result=result, row_grain=MEETING_GRAIN, warnings=warnings, rules=[LINK_RULE]
             )
@@ -1087,7 +1215,9 @@ class SfGov:
                 "start_date": first.isoformat(),
                 "end_date": last.isoformat(),
             },
-            run=self._one_at_a_time(run),
+            run=self._with_copy(
+                live, lambda copy: copy.meetings(name=name, first=first, last=last)
+            ),
         )
 
     def search(self, *, text: str, kind: str = "pages") -> PreparedLookup:
@@ -1096,7 +1226,7 @@ class SfGov:
         chosen = validate_kind(kind)
         self._refuse_while_paused()
 
-        async def run() -> Lookup:
+        async def live() -> Lookup:
             if chosen == "pages":
                 url, params = PAGES_URL, {"search": words, "locale": "en"}
                 what, fields, grain = "page search", PAGE_SEARCH_FIELDS, PAGE_SEARCH_GRAIN
@@ -1146,7 +1276,9 @@ class SfGov:
             return Lookup(result=result, row_grain=grain, warnings=warnings, rules=[LINK_RULE])
 
         return PreparedLookup(
-            host=SFGOV_HOST, arguments={"text": words, "kind": chosen}, run=self._one_at_a_time(run)
+            host=SFGOV_HOST,
+            arguments={"text": words, "kind": chosen},
+            run=self._with_copy(live, lambda copy: copy.search(words=words, kind=chosen)),
         )
 
     async def close(self) -> None:

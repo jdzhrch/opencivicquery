@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs the SF.gov daily copy once a day at 05:30 local time. See operations/sfgov-copy.md.
+  Replace __REPOSITORY__, __UV__, __BUCKET__, __CREDENTIALS__, and __LOG__ before loading.
+  __REPOSITORY__ is best a clone kept only for this job, so it never runs unfinished work.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.opencivicquery.sfgov-copy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV__</string>
+    <string>run</string>
+    <string>--directory</string>
+    <string>__REPOSITORY__</string>
+    <string>--frozen</string>
+    <string>--no-dev</string>
+    <string>opencivicquery</string>
+    <string>sfgov-copy</string>
+    <string>--bucket</string>
+    <string>__BUCKET__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+    <string>__CREDENTIALS__</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>5</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

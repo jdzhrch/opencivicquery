@@ -25,7 +25,7 @@ def load_build_script():
 
 def server_tool_names() -> set[str]:
     source = (ROOT / "src" / "opencivicquery" / "mcp_server.py").read_text()
-    return set(re.findall(r'@server\.tool\(\s*name="([a-z_]+)"', source))
+    return set(re.findall(r'@tool\(\s*name="([a-z_]+)"', source))
 
 
 def skill_frontmatter() -> dict[str, str]:

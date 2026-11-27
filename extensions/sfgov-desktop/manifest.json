@@ -1,0 +1,72 @@
+{
+  "manifest_version": "0.4",
+  "name": "opencivicquery-sfgov",
+  "display_name": "OpenCivicQuery: SF.gov",
+  "version": "0.1.0",
+  "description": "Live answers from San Francisco's city website, SF.gov: agency news, meeting pages with the files attached to them, such as minutes, and page and document titles, each with evidence a reporter can cite.",
+  "long_description": "OpenCivicQuery's three SF.gov tools, run on your own computer. They read the content interface behind www.sf.gov directly, so answers are live and cover every agency on the site.\n\n- **find_sfgov_news** lists an agency's news pages in a date range.\n- **find_sfgov_meetings** lists a board's or commission's meeting pages in a date range, with the files attached to each page, such as minutes, and video links.\n- **search_sfgov** finds pages by words in the title, or files in SF.gov's document library.\n\nEvery answer carries warnings, presentation rules, and an evidence snapshot saved on this computer under ~/.opencivicquery/snapshots; pin_snapshot and get_snapshot keep and read them.",
+  "author": {
+    "name": "Rongcheng Zhang",
+    "url": "https://github.com/jdzhrch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdzhrch/opencivicquery.git"
+  },
+  "homepage": "https://github.com/jdzhrch/opencivicquery#sfgov-on-claude-desktop",
+  "support": "https://github.com/jdzhrch/opencivicquery/issues",
+  "server": {
+    "type": "uv",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--frozen",
+        "--no-dev",
+        "--directory",
+        "${__dirname}",
+        "server.py"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "find_sfgov_news",
+      "description": "List an SF.gov agency's news pages in a date range, newest first."
+    },
+    {
+      "name": "find_sfgov_meetings",
+      "description": "List a San Francisco body's meeting pages in a date range, with attached files and video links."
+    },
+    {
+      "name": "search_sfgov",
+      "description": "Find SF.gov pages by words in the title, or files in its document library."
+    },
+    {
+      "name": "pin_snapshot",
+      "description": "Keep an answer's evidence snapshot so it is not deleted."
+    },
+    {
+      "name": "get_snapshot",
+      "description": "Read back the rows and warnings an evidence snapshot froze."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  },
+  "keywords": [
+    "san francisco",
+    "sf.gov",
+    "journalism",
+    "public records",
+    "meetings"
+  ],
+  "license": "MIT"
+}

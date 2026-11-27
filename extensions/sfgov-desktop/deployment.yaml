@@ -1,0 +1,10 @@
+# OpenCivicQuery's SF.gov tools on a reporter's own computer, through Claude Desktop.
+# Only the SF.gov tools are offered; the Socrata settings are required by the server and unused.
+deployment_id: sfgov-desktop
+display_name: OpenCivicQuery SF.gov (Claude Desktop)
+socrata:
+  portals: any
+limits:
+  daily_requests: 2000
+  per_portal_per_minute: 60
+packs: []

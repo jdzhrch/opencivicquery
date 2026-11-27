@@ -132,6 +132,34 @@ def test_mcp_tools_expose_source_identity_and_safety_fields(
     assert "will not open the tool output" in server.instructions
 
 
+def test_a_tools_setting_offers_only_the_named_tools(
+    local_config_path: Path,
+    tmp_path: Path,
+) -> None:
+    tools = ("find_sfgov_news", "search_sfgov")
+    server = create_server(open_settings(local_config_path, tmp_path, tools=tools))
+
+    assert {tool.name for tool in server._tool_manager.list_tools()} == set(tools)
+    assert server.instructions.startswith(
+        "This server offers these OpenCivicQuery tools: find_sfgov_news, search_sfgov."
+    )
+    assert "list_source_packs" not in server.instructions
+    assert "presentation_rules" in server.instructions
+    with pytest.raises(ConfigurationError, match="lacks"):
+        create_server(open_settings(local_config_path, tmp_path, tools=("find_sfgov_new",)))
+
+
+def test_the_tools_setting_comes_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, local_config_path: Path
+) -> None:
+    monkeypatch.setenv("OPENCIVICQUERY_CONFIG_PATH", str(local_config_path))
+    monkeypatch.setenv("OPENCIVICQUERY_TOOLS", " find_sfgov_news, search_sfgov ,")
+
+    settings = RuntimeSettings.from_environment()
+
+    assert settings.tools == ("find_sfgov_news", "search_sfgov")
+
+
 def test_open_server_has_no_protocol_authentication(
     local_config_path: Path,
     tmp_path: Path,

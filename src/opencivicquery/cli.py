@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _ACTOR_EMAIL = re.compile(r"^[^@\s\"]+@[^@\s\"]+$")
 
 
 def _usage(args: argparse.Namespace) -> int:
+    if args.hours < 1 or args.limit < 1 or args.limit > 1000:
+        raise SystemExit("hours must be positive and limit must be between 1 and 1000")
     if not _PROJECT_ID.fullmatch(args.project):
         raise SystemExit("Invalid Google Cloud project ID")
     since = datetime.now(UTC) - timedelta(hours=args.hours)
@@ -43,6 +47,74 @@ def _usage(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_sfgov_copy(args: argparse.Namespace) -> int:
+    # Imported here so the usage command never loads the source modules.
+    from opencivicquery.sources.base import SourceError
+    from opencivicquery.sources.sfgov import SfGov
+    from opencivicquery.sources.sfgov_copy import (
+        DEFAULT_AGENCIES,
+        GcsCopyStore,
+        LocalCopyStore,
+        as_json,
+        decode_copy,
+        encode_copy,
+        plan_copy,
+        plan_summary,
+        sync_copy,
+    )
+
+    store = GcsCopyStore(args.bucket) if args.bucket else LocalCopyStore(Path(args.path))
+    names = args.agency or list(DEFAULT_AGENCIES)
+    data = await store.read()
+    previous = None
+    if data is not None:
+        try:
+            previous = decode_copy(data)
+        except SourceError as exc:
+            # A damaged or older-format copy must not stop every later run: read in full.
+            print(f"The earlier copy could not be read ({exc}); this run reads everything again.")
+    source = SfGov()
+    try:
+        if args.plan:
+            rows = await plan_copy(source, names, previous)
+            print(as_json(rows))
+            print(plan_summary(rows))
+            print(f"Plan requests sent: {source.requests_sent}")
+            return 0
+        copy, outcomes = await sync_copy(source, names, previous, sample=args.sample)
+    finally:
+        await source.close()
+    for outcome in outcomes:
+        line = (
+            f"{outcome.name}: {outcome.status}; news {outcome.news} of {outcome.news_total} "
+            f"({outcome.text_requests} text reads, {outcome.text_failures} failed); meeting "
+            f"pages {outcome.meetings} of {outcome.meetings_total}"
+        )
+        print(line + (f"; {outcome.detail}" if outcome.detail else ""))
+    print(f"Requests sent: {source.requests_sent}")
+    if copy is None:
+        print("No agency could be read and there is no earlier copy, so nothing was written.")
+        return 1
+    location = await store.write(encode_copy(copy))
+    print(
+        f"Wrote the copy to {location} (run finished {copy.copied_at.isoformat()}): "
+        f"{len(copy.news)} news pages, {len(copy.meetings)} meeting pages, "
+        f"{len(copy.documents)} documents."
+    )
+    return 0 if all(outcome.status == "read" for outcome in outcomes) else 1
+
+
+def _sfgov_copy(args: argparse.Namespace) -> int:
+    if bool(args.path) == bool(args.bucket):
+        raise SystemExit("Give either --path or --bucket")
+    if args.sample is not None and not 1 <= args.sample <= 50:
+        raise SystemExit("--sample must be between 1 and 50")
+    if args.sample is not None and args.bucket:
+        # A sample copy is partial; it must never replace the copy a server answers from.
+        raise SystemExit("A sample run writes only to a local --path")
+    return asyncio.run(_run_sfgov_copy(args))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opencivicquery")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -52,13 +124,33 @@ def build_parser() -> argparse.ArgumentParser:
     usage.add_argument("--limit", type=int, default=100)
     usage.add_argument("--actor")
     usage.set_defaults(handler=_usage)
+    copy = subparsers.add_parser(
+        "sfgov-copy",
+        help="Read SF.gov news and meeting pages into the daily copy the server answers from",
+    )
+    copy.add_argument("--path", help="Local snapshot folder; the copy goes under sfgov-copy/")
+    copy.add_argument("--bucket", help="Snapshot bucket; the copy goes under sfgov-copy/")
+    copy.add_argument(
+        "--agency",
+        action="append",
+        help="An agency's exact SF.gov name; repeat for several. Default: the built-in list.",
+    )
+    copy.add_argument(
+        "--sample",
+        type=int,
+        help="Read at most this many news and meeting pages per agency, for a test run",
+    )
+    copy.add_argument(
+        "--plan",
+        action="store_true",
+        help="Only count what a full read would fetch, and write nothing",
+    )
+    copy.set_defaults(handler=_sfgov_copy)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.hours < 1 or args.limit < 1 or args.limit > 1000:
-        raise SystemExit("hours must be positive and limit must be between 1 and 1000")
     raise SystemExit(args.handler(args))
 
 

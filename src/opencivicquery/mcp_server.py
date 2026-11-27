@@ -48,6 +48,7 @@ from opencivicquery.sources.sec_edgar import SUBMISSIONS_HOST as SEC_HOST
 from opencivicquery.sources.sfgov import MAX_AGENCY_LENGTH as SFGOV_MAX_AGENCY
 from opencivicquery.sources.sfgov import MAX_TEXT_LENGTH as SFGOV_MAX_TEXT
 from opencivicquery.sources.sfgov import SFGOV_HOST, SfGov
+from opencivicquery.sources.sfgov_copy import CopyReader, copy_store
 from opencivicquery.sources.socrata import SocrataNetwork
 from opencivicquery.sources.usaspending import DEFAULT_LIMIT as AWARDS_DEFAULT_LIMIT
 from opencivicquery.sources.usaspending import (
@@ -96,6 +97,18 @@ SERVER_INSTRUCTIONS = (
     "meaning is undocumented, draft a short, specific question the reporter can send to the "
     "agency that publishes the dataset."
 )
+
+
+def _instructions(tools: tuple[str, ...]) -> str:
+    """The server instructions, introduced by the tools offered when only some are."""
+    if not tools:
+        return SERVER_INSTRUCTIONS
+    rules = SERVER_INSTRUCTIONS.split("\n\n", 1)[1]
+    return (
+        f"This server offers these OpenCivicQuery tools: {', '.join(tools)}. They follow "
+        "OpenCivicQuery's evidence rules: every successful answer returns a citable snapshot."
+        f"\n\n{rules}"
+    )
 
 
 @dataclass
@@ -440,7 +453,16 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             stack.push_async_callback(state.census.close)
             state.nonprofits = NonprofitExplorer()
             stack.push_async_callback(state.nonprofits.close)
-            state.sfgov = SfGov()
+            # The daily copy sits beside the snapshots. Without one, the tools answer live only.
+            state.sfgov = SfGov(
+                copy=CopyReader(
+                    copy_store(
+                        backend=settings.snapshot_backend,
+                        path=settings.snapshot_path,
+                        bucket=settings.snapshot_bucket,
+                    )
+                )
+            )
             stack.push_async_callback(state.sfgov.close)
             if verifier is not None:
                 stack.push_async_callback(verifier.close)
@@ -452,15 +474,23 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         name="opencivicquery",
         title="OpenCivicQuery",
         description="Open, auditable access to government open data for reporters.",
-        instructions=SERVER_INSTRUCTIONS,
+        instructions=_instructions(settings.tools),
         version=__version__,
         lifespan=lifespan,
         auth=auth,
         token_verifier=verifier,
         log_level=settings.log_level.upper(),
     )
+    offered: list[str] = []
 
-    @server.tool(
+    def tool(*, name: str, description: str) -> Callable[[Any], Any]:
+        """Register a tool, or skip it when settings.tools names others."""
+        offered.append(name)
+        if settings.tools and name not in settings.tools:
+            return lambda function: function
+        return server.tool(name=name, description=description)
+
+    @tool(
         name="list_source_packs",
         description=(
             "List the portals and datasets that a source pack documents, with the date each "
@@ -473,7 +503,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
         packs = service.list_packs(actor_id=_actor_id(settings))
         return _ok_result({"packs": [pack.model_dump(mode="json") for pack in packs]})
 
-    @server.tool(
+    @tool(
         name="search_datasets",
         description=(
             "Search the Socrata catalog for datasets. Leave domain empty to search every "
@@ -502,7 +532,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             return _known_error(exc) or _internal_error()
         return _ok_result({"results": [entry.model_dump(mode="json") for entry in entries]})
 
-    @server.tool(
+    @tool(
         name="describe_dataset",
         description=(
             "Return a dataset schema, source update time, and, when a source pack documents "
@@ -528,7 +558,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             return _known_error(exc) or _internal_error()
         return _ok_result(description.model_dump(mode="json"))
 
-    @server.tool(
+    @tool(
         name="query_dataset",
         description=(
             "Run a read-only SoQL query with a mandatory row ceiling. The response on success "
@@ -573,7 +603,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             return _known_error(exc) or _internal_error()
         return _ok_result(response.model_dump(mode="json"))
 
-    @server.tool(
+    @tool(
         name="geocode_address",
         description=(
             "Look up one U.S. street address in the U.S. Census Bureau's Census Geocoder. "
@@ -643,7 +673,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The Legistar source was not built")
         return state.legistar
 
-    @server.tool(
+    @tool(
         name="find_meetings",
         description=(
             "Find public meetings of a city or county that publishes its agendas in Granicus "
@@ -695,7 +725,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state: legistar(state).find_meetings(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="get_meeting_items",
         description=(
             "List the agenda items of one Legistar meeting, with the action, result, tally, "
@@ -724,7 +754,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state: legistar(state).get_meeting_items(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="get_item_votes",
         description=(
             "List each member's vote on one agenda item of a Legistar meeting, as the clerk "
@@ -761,7 +791,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state: legistar(state).get_item_votes(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="search_legislation",
         description=(
             "Search a jurisdiction's Legistar legislation, such as ordinances, resolutions, "
@@ -816,7 +846,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The SEC source was not built")
         return state.sec
 
-    @server.tool(
+    @tool(
         name="find_sec_filings",
         description=(
             "List one company's filings in the SEC's EDGAR system, newest first, with links "
@@ -888,7 +918,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The USAspending source was not built")
         return state.usaspending
 
-    @server.tool(
+    @tool(
         name="search_federal_awards",
         description=(
             "Find federal prime awards on USAspending.gov, such as contracts, grants, loans, "
@@ -971,7 +1001,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The GovInfo source was not built")
         return state.govinfo
 
-    @server.tool(
+    @tool(
         name="search_court_opinions",
         description=(
             "Search federal court opinions in GovInfo's United States Courts Opinions "
@@ -1028,7 +1058,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The Nonprofit Explorer source was not built")
         return state.nonprofits
 
-    @server.tool(
+    @tool(
         name="search_nonprofits",
         description=(
             "Find tax-exempt organizations by name in ProPublica's Nonprofit Explorer, which "
@@ -1068,7 +1098,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state_: nonprofits(state_).search_nonprofits(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="get_nonprofit_filings",
         description=(
             "List one tax-exempt organization's IRS Form 990, 990-EZ, and 990-PF filings "
@@ -1105,7 +1135,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The SF.gov source was not built")
         return state.sfgov
 
-    @server.tool(
+    @tool(
         name="find_sfgov_news",
         description=(
             "List news pages on SF.gov, San Francisco's city website, dated in a range, "
@@ -1114,8 +1144,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "uses, such as Office of the Mayor; an inexact name returns the names that "
             "match instead of a guess. The lookup reads the 500 newest items and reports a "
             "range it could not reach as partial. The server runs one SF.gov lookup at a "
-            "time, so call the SF.gov tools one after another. Same response shape and "
-            "rules as query_dataset."
+            "time, so call the SF.gov tools one after another. When SF.gov cannot be reached, "
+            "the answer comes from a daily copy and says so. The response carries warnings, "
+            "presentation_rules to obey, and an evidence snapshot."
         ),
     )
     async def find_sfgov_news(
@@ -1135,7 +1166,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state_: sfgov(state_).find_news(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="find_sfgov_meetings",
         description=(
             "List the meeting pages one San Francisco board, commission, or department "
@@ -1148,7 +1179,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "minutes. A page with no readable date is listed last whatever the dates. For "
             "the Board of Supervisors and its committees, use find_meetings with client "
             "sfgov. The server runs one SF.gov lookup at a time, so call the SF.gov tools "
-            "one after another. Same response shape and rules as query_dataset."
+            "one after another. When SF.gov cannot be reached, the answer comes from a daily "
+            "copy and says so. The response carries warnings, presentation_rules to obey, "
+            "and an evidence snapshot."
         ),
     )
     async def find_sfgov_meetings(
@@ -1168,7 +1201,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state_: sfgov(state_).find_meetings(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="search_sfgov",
         description=(
             "Find pages on SF.gov, San Francisco's city website, by words in the title, or "
@@ -1177,8 +1210,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "and events. Returns at most 50 rows in the site's own order, each with its "
             "public link. It cannot be limited to one agency; for one agency's news or "
             "meetings use find_sfgov_news or find_sfgov_meetings. The server runs one "
-            "SF.gov lookup at a time, so call the SF.gov tools one after another. Same "
-            "response shape and rules as query_dataset."
+            "SF.gov lookup at a time, so call the SF.gov tools one after another. When SF.gov "
+            "cannot be reached, the answer comes from a daily copy and says so. The response "
+            "carries warnings, presentation_rules to obey, and an evidence snapshot."
         ),
     )
     async def search_sfgov(
@@ -1216,7 +1250,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             raise RuntimeError("The Census data source was not built")
         return state.census
 
-    @server.tool(
+    @tool(
         name="get_census_data",
         description=(
             "Get American Community Survey 5-year estimates from the U.S. Census Bureau's "
@@ -1280,7 +1314,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             prepare=lambda state_: census(state_).get_data(**arguments),
         )
 
-    @server.tool(
+    @tool(
         name="pin_snapshot",
         description=(
             "Preserve a temporary query snapshot indefinitely for a published story. Use the "
@@ -1301,7 +1335,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             return _known_error(exc) or _internal_error()
         return _ok_result(reference.model_dump(mode="json"))
 
-    @server.tool(
+    @tool(
         name="get_snapshot",
         description=(
             "Read a temporary or pinned evidence snapshot for verification. The snapshot "
@@ -1343,6 +1377,9 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
     # which keeps an instance billed while idle. The SDK has no public opt-out;
     # protocol tests guard this pinned API seam.
     server._lowlevel_server._request_handlers.pop("subscriptions/listen", None)
+    unknown = sorted(set(settings.tools) - set(offered))
+    if unknown:
+        raise ConfigurationError(f"OPENCIVICQUERY_TOOLS names tools this server lacks: {unknown}")
     return server
 
 

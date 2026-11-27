@@ -48,6 +48,9 @@ class RuntimeSettings(BaseModel):
     census_api_key: SecretStr | None = None
     """Census Data API key. Without it, the census data tool refuses to run."""
     govinfo_api_key: SecretStr | None = None
+    tools: tuple[str, ...] = ()
+    """Offer only these tools. Empty offers every tool. The Claude Desktop extension uses it
+    to offer the SF.gov tools alone."""
     legistar_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
     """Legistar API tokens by client name, for jurisdictions that require one."""
     """api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run."""
@@ -85,6 +88,7 @@ class RuntimeSettings(BaseModel):
             sec_contact=os.getenv("OPENCIVICQUERY_SEC_CONTACT") or None,
             census_api_key=os.getenv("OPENCIVICQUERY_CENSUS_API_KEY") or None,
             govinfo_api_key=os.getenv("OPENCIVICQUERY_GOVINFO_API_KEY") or None,
+            tools=csv("OPENCIVICQUERY_TOOLS"),
             legistar_tokens={
                 name.removeprefix(LEGISTAR_TOKEN_PREFIX).lower().replace("_", "-"): value
                 for name, value in os.environ.items()

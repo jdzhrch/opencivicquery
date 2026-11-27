@@ -108,7 +108,33 @@ Three tools read the content interface behind [SF.gov](https://www.sf.gov/), San
 
 The caller names an agency exactly as SF.gov does, such as `Office of the Mayor` or `Police Commission`. A name that is not exact returns the names that match, and the tool never picks one. This project found no public documentation for the interface, so every caveat comes from a live check on 2026-11-26, and each answer says so. The interface cannot filter by a date range. The news tool therefore reads the 500 newest items and reports a range it could not reach as partial. The meeting tool reads up to 496 of a body's pages and keeps the ones whose dates reach into the range; a page that covers a span of days, such as a notice that no meeting takes place for several weeks, is kept for any day of the span, and a page with no readable date is listed last in every answer with a warning. SF.gov has no minutes field, so the tool returns the attached files under the headings staff wrote and leaves it to the reader to check which file is the minutes of that meeting. A title search cannot be limited to one agency. Only English pages are read. The Board of Supervisors and its committees publish their meetings through Legistar, so use `find_meetings` with client `sfgov` for those.
 
-The server reads the content interface behind www.sf.gov on one host, `api.sf.gov`, and identifies itself as OpenCivicQuery. It returns links to documents, public pages, and video without requesting them. Each server process runs one SF.gov lookup at a time with at most one request a second; a lookup that waits more than 20 seconds behind others is refused before it sends anything. When the site answers HTTP 429, the tool returns an error that says to try again in a minute, retries nothing, and that process sends the site nothing for the next 60 seconds. These limits hold per process, so a deployment with two instances can send twice as much.
+The server reads the content interface behind www.sf.gov on one host, `api.sf.gov`, and identifies itself as OpenCivicQuery. It returns links to documents, public pages, and video without requesting them. Each server process runs one SF.gov lookup at a time with at most one request a second; a lookup that waits more than 20 seconds behind others is refused before it sends anything. When the site answers HTTP 429, the tool retries nothing, that process sends the site nothing for the next 60 seconds, and the answer comes from the daily copy where the process has one, or is an error that says to try again in a minute. These limits hold per process, so a deployment with two instances can send twice as much.
+
+### The daily copy on the public instance
+
+On the public instance, the three SF.gov tools answer from a daily copy. The copy holds the English news pages, with their text, and the meeting pages, with their agenda text and attached files, of nine agencies: the Office of the Mayor, the Controller's Office, the Board of Supervisors, the Department of Public Health, the City Attorney, Homelessness and Supportive Housing, the Police Commission, the San Francisco Health Commission, and the Board of Appeals. Every answer from the copy names the date the copy was taken and the agencies it covers, says what it leaves out, and is marked limited, never complete. It ends with a sentence that points to the Claude Desktop extension for live results that cover every agency. An agency outside the copy gets an error that lists the agencies it covers.
+
+A maintainer's computer makes the copy once a day with `opencivicquery sfgov-copy` and writes it to the server's snapshot storage under `sfgov-copy/`. It reads with the same identity and pace as the tools, one request a second. After the first run it fetches only news pages that are new or whose listing changed, so a daily run takes about 50 requests. `operations/sfgov-copy.md` is the runbook.
+
+## SF.gov on Claude Desktop
+
+The OpenCivicQuery SF.gov extension runs the three SF.gov tools, and the two snapshot tools, on your own computer, so answers are live and cover every agency on SF.gov. It needs Claude Desktop on macOS or Windows and nothing else: Claude Desktop installs the extension's Python and packages itself. Evidence snapshots are saved under `~/.opencivicquery/snapshots`.
+
+To install it:
+
+1. Download `opencivicquery-sfgov-<version>.mcpb` from the project's [releases](https://github.com/jdzhrch/opencivicquery/releases), or build it as shown below.
+2. Double-click the file, or drag it into the Claude Desktop window. You can also open Settings, Extensions, Advanced settings, Install Extension, and choose the file.
+3. Click Install, then ask a question about an SF.gov agency, such as "What did the Mayor's office announce last week?"
+
+A Claude Team or Enterprise owner can offer it to every member: open Organization settings, Connectors, and the Desktop tab; click Add custom extension and choose the file; then open its menu under Custom team extensions and choose Add to team. Members then install it with one click. For a new version, raise the version in `extensions/sfgov-desktop/manifest.json`, rebuild, and use Upload new version from the same menu.
+
+To build the file from this repository:
+
+```bash
+uv run python scripts/build_sfgov_extension.py --validate --smoke
+```
+
+The file lands in `dist/`. `--validate` checks the manifest with the official MCPB tool and needs Node.js; `--smoke` unpacks the file, starts its server, and lists its tools.
 
 ## Federal court opinions
 
@@ -233,6 +259,7 @@ Environment variables:
 | `OPENCIVICQUERY_CENSUS_API_KEY` | | Free Census Data API key. Without it, the census data tool refuses to run. |
 | `OPENCIVICQUERY_LEGISTAR_TOKEN_<CLIENT>` | | Legistar token for one jurisdiction that requires one, such as `OPENCIVICQUERY_LEGISTAR_TOKEN_NYC`. Underscores in the client name stand for hyphens. |
 | `OPENCIVICQUERY_GOVINFO_API_KEY` | | Free api.data.gov key for GovInfo. Without it, the court opinions tool refuses to run. |
+| `OPENCIVICQUERY_TOOLS` | | Comma-separated tool names. When set, the server offers only these tools. The Claude Desktop extension uses it. |
 
 Login is off by default. A newsroom that wants per-reporter attribution can turn on Google sign-in; see `deployments/newsroom-with-login.example.yaml` and the OAuth variables in `.env.example`. A deployment file with an `access` section refuses to start while login is off, so a forgotten setting never opens a private instance to everyone.
 
