@@ -93,7 +93,7 @@ def test_the_build_writes_the_same_bytes_every_time(
     output = module.build()
 
     assert output.read_bytes() == first
-    assert output.name == f"opencivicquery-sfgov-{module.manifest()['version']}.mcpb"
+    assert output.name == "opencivicquery-sfgov.mcpb"
     with zipfile.ZipFile(output) as bundle:
         names = bundle.namelist()
         assert "manifest.json" in names and "server.py" in names

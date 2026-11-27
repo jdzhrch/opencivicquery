@@ -129,7 +129,7 @@ The OpenCivicQuery SF.gov extension runs the four SF.gov tools, and the two snap
 
 To install it:
 
-1. Download `opencivicquery-sfgov-<version>.mcpb` from the [latest release](https://github.com/jdzhrch/opencivicquery/releases/latest), or build it as shown below.
+1. Download [`opencivicquery-sfgov.mcpb`](https://github.com/jdzhrch/opencivicquery/releases/latest/download/opencivicquery-sfgov.mcpb), the file of the latest release, or build it as shown below. Every version keeps this file name; its version is inside the file.
 2. Double-click the file, or drag it into the Claude Desktop window. You can also open Settings, Extensions, Advanced settings, Install Extension, and choose the file.
 3. Click Install, then ask a question about an SF.gov agency, such as "What did the Mayor's office announce last week?"
 
@@ -143,7 +143,9 @@ To build the file from this repository:
 uv run python scripts/build_sfgov_extension.py --validate --smoke
 ```
 
-The file lands in `dist/`. `--validate` checks the manifest with the official MCPB tool and needs Node.js; `--smoke` unpacks the file, starts its server, and lists its tools. Each version is published as this repository's latest release, tagged `sfgov-desktop-v<version>`, because answers from the public instance's daily copy link to `releases/latest`.
+The file lands in `dist/` as `opencivicquery-sfgov.mcpb`. `--validate` checks the manifest with the official MCPB tool and needs Node.js; `--smoke` unpacks the file, starts its server, and lists its tools. Each version is published as a release tagged `sfgov-desktop-v<version>`, with the file attached under exactly that name, and that release must be the repository's Latest release: answers from the public instance's daily copy link to `releases/latest/download/opencivicquery-sfgov.mcpb`. Publish any other release with `--latest=false`, and publish the extension's release before deploying a server that links to it.
+
+Every tool except `pin_snapshot` declares itself read-only, so clients such as Claude's Cowork can run it without asking each time. A lookup still saves an evidence snapshot: on the hosted server, temporary snapshots are deleted after 90 days, while the extension keeps them under `~/.opencivicquery/snapshots` until you delete them.
 
 ## Federal court opinions
 
@@ -287,7 +289,7 @@ The per-client cap raises the cost of abuse; it does not prevent it. Someone wit
 
 ## Plugin development
 
-The skill lives in `plugins/opencivicquery/skills/ask-open-data/`. Its reference `where-else-to-look.md` lists paid and manual-only channels for records the tools cannot reach, such as state court dockets and meeting transcripts, with what each holds, how to get access, and its published price; every entry names a dated source, and a test enforces it. Both the Claude plugin and the ChatGPT package use it, and the version in `plugins/opencivicquery/.claude-plugin/plugin.json` applies to both. Raise that version with every change to the skill or the connection.
+The skill lives in `plugins/opencivicquery/skills/ask-open-data/`. Its reference `where-else-to-look.md` lists paid and manual-only channels for records the tools cannot reach, such as state court dockets and meeting transcripts, with what each holds, how to get access, and its published price; for some San Francisco websites it gives the steps a reporter follows by hand, and for others it names the tool or dataset that already holds the same records. Every entry names a dated source, and a test enforces it. A second reference, `san-francisco-request-channels.md`, lists the records-request and press channels of 53 San Francisco agencies, role-based only, each with the official page it came from and the date it was checked. Both the Claude plugin and the ChatGPT package use it, and the version in `plugins/opencivicquery/.claude-plugin/plugin.json` applies to both. Raise that version with every change to the skill or the connection.
 
 ## Development
 

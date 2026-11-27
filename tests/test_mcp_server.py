@@ -138,6 +138,34 @@ def test_mcp_tools_expose_source_identity_and_safety_fields(
     assert "will not open the tool output" in server.instructions
 
 
+def test_every_tool_but_pin_snapshot_declares_itself_read_only(
+    local_config_path: Path,
+    tmp_path: Path,
+) -> None:
+    server = create_server(open_settings(local_config_path, tmp_path))
+    tools = server._tool_manager.list_tools()
+
+    assert {tool.name for tool in tools} == EXPECTED_TOOLS
+    for tool in tools:
+        assert tool.annotations is not None, tool.name
+        assert tool.annotations.destructive_hint is False, tool.name
+        assert tool.annotations.read_only_hint is (tool.name != "pin_snapshot"), tool.name
+
+
+@pytest.mark.asyncio
+async def test_tools_list_carries_the_read_only_declaration(
+    local_config_path: Path,
+    tmp_path: Path,
+) -> None:
+    server = create_server(open_settings(local_config_path, tmp_path))
+    async with Client(server) as client:
+        listed = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    assert listed["find_sfgov_news"].annotations.read_only_hint is True
+    assert listed["query_dataset"].annotations.read_only_hint is True
+    assert listed["pin_snapshot"].annotations.read_only_hint is False
+
+
 def test_a_tools_setting_offers_only_the_named_tools(
     local_config_path: Path,
     tmp_path: Path,

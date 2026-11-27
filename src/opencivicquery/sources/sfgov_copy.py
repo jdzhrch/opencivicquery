@@ -125,8 +125,10 @@ MAX_STORED_BYTES = 16 * 1024 * 1024
 MAX_TEXT_FAILURES_IN_A_ROW = 5
 # Our own bound: one news page whose text cannot be read is skipped, but five in a row mean
 # the site stopped answering, and the agency's read stops instead of waiting out every page.
-# The extension is published as this repository's latest release.
-EXTENSION_URL = f"{PROJECT_URL}/releases/latest"
+# The extension is published as this repository's latest release, always under the same file
+# name, so this link downloads the newest file directly and a reporter only opens it.
+EXTENSION_FILE = "opencivicquery-sfgov.mcpb"
+EXTENSION_URL = f"{PROJECT_URL}/releases/latest/download/{EXTENSION_FILE}"
 
 NO_COPY_MEETINGS_WARNING = (
     "No meeting page in the copy matched these dates. This shows only what SF.gov listed for "
@@ -443,6 +445,12 @@ def _day(moment: datetime) -> str:
     return moment.date().isoformat()
 
 
+def _taken(copy: SfGovCopy) -> str:
+    """When the copy was taken, for a refusal that names no single agency."""
+    days = sorted({_day(agency.copied_at) for agency in copy.agencies})
+    return f"on {days[0]}" if len(days) == 1 else f"between {days[0]} and {days[-1]}"
+
+
 def _resolve(copy: SfGovCopy, name: str) -> CopyAgency:
     for agency in copy.agencies:
         if _same_name(agency.title, name):
@@ -454,8 +462,8 @@ def _resolve(copy: SfGovCopy, name: str) -> CopyAgency:
         argument="agency",
         public_message=(
             "This server could not get a live answer from SF.gov, so this lookup used the "
-            f"daily copy, which covers only these agencies: {covered}. {name} is not one of "
-            "them. "
+            f"daily copy, taken {_taken(copy)}, which covers only these agencies: {covered}. "
+            f"{name} is not one of them. "
             "For any agency, use the OpenCivicQuery SF.gov extension for Claude Desktop: "
             f"{EXTENSION_URL}"
         ),
@@ -756,8 +764,8 @@ def page_from_copy(copy: SfGovCopy, *, page_id: int) -> Lookup:
             argument="page_id",
             public_message=(
                 "This server could not get a live answer from SF.gov, so this lookup used the "
-                f"daily copy, which holds only the English news and meeting pages of: "
-                f"{covered}. Page "
+                f"daily copy, taken {_taken(copy)}, which holds only the English news and "
+                f"meeting pages of: {covered}. Page "
                 f"{page_id} is not among them. For any page, use the OpenCivicQuery SF.gov "
                 f"extension for Claude Desktop: {EXTENSION_URL}"
             ),

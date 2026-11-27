@@ -62,7 +62,9 @@ def build() -> Path:
     if tools != EXPECTED_TOOLS:
         raise SystemExit(f"manifest tools {sorted(tools)} differ from {sorted(EXPECTED_TOOLS)}")
     DIST.mkdir(exist_ok=True)
-    output = DIST / f"opencivicquery-sfgov-{data['version']}.mcpb"
+    # One fixed file name for every version, so the latest release's download link never
+    # changes. The version lives in the manifest inside the file.
+    output = DIST / "opencivicquery-sfgov.mcpb"
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         for name, source in sorted(bundle_files().items()):
             info = zipfile.ZipInfo(name, date_time=FIXED_TIME)

@@ -79,20 +79,288 @@ datasets:
 - dataset_id: pitq-e56w
   name: Campaign Finance Transactions
   row_grain: One transaction from the most recent version of a filing  # official: summary
-  unique_key: element_nid  # official: primary key; checked 2026-10-27: 983,345 distinct of 983,345
+  unique_key: element_nid  # official: primary key; checked 2026-11-26: 986,406 distinct of 986,406
   default_time_field: calculated_date  # official: the 'most-appropriate' date for the transaction
   geography_fields: {}
-  # official: "how to use" (form_type) and the calculated_amount field description.
+  # official: "how to use" (form_type), the form_type and calculated_amount field descriptions.
+  # checked 2026-11-26: 33 form_type values; A (Schedule A, monetary contributions) holds 496,505 rows.
   counting_guidance: Filter by form_type before adding anything up; the source says to use it to tell
-    transaction types apart. calculated_amount is the amount the source calls most appropriate.
+    transaction types apart. Letters are Form 460 schedules (A is monetary contributions received);
+    other values name the FPPC form. calculated_amount is the amount the source calls most appropriate.
   caveats:
   - The dataset combines transactions from FPPC Forms 460, 461, 496, 497, and 450, across all schedules,
     and includes unitemized totals.  # official: summary
+  # official: is_itemized description; checked 2026-11-26: 127,468 rows with is_itemized false, equal
+  # to the row total of the *Line2, *Unitemized, F450Line* and F401*Line2 form_type values.
+  - Unitemized totals are rows of their own. is_itemized tells itemized and unitemized rows apart, and
+    unitemized rows carry form_type values such as F460ALine2.
   - An amendment completely replaces the original filing and any earlier amendments.  # official: how the dataset is created
-  - The nightly update starts at midnight Pacific, and the source advises viewing or downloading before
-    midnight or after 8am because data may be incomplete during the update.  # official: update process
+  # checked 2026-11-26: filing_nid 94f55c38-4d4c-41f1-83b2-fbe7c4a6c3ed has versions 1 and 2 in
+  # qizs-bwft; all 84 transaction rows carry version 2 and none carry version 1.
+  - Transactions from a superseded version of a filing are not in this dataset; only the current
+    version's rows remain.
   - Transactions from rejected filings are not included.  # official: how to use
   - element_nid does not persist between an original filing and its amendment.  # official: field description
+  - transaction_id is assigned by the filer, is not necessarily consistent between an original and its
+    amendments, and is unique only within a filer.  # official: field description
+  # official: field descriptions; checked 2026-11-26: 0 Schedule A rows where calculated_date differs
+  # from a non-blank transaction_date.
+  - filing_date is the date the filing was submitted. transaction_date is the transaction date, and
+    start_date and end_date bound the filing period. For Schedule A rows, calculated_date equalled
+    transaction_date wherever transaction_date was filled in.
+  # checked 2026-11-26: 154 rows dated after 2026-11-26 (latest 2203-03-07) and 86 rows dated before
+  # 1990-01-01 (earliest 1900-09-14).
+  - Some calculated_date values lie far outside the filing years. A check on 2026-11-26 found 154 rows
+    dated after that day, as late as 2203, and 86 rows dated before 1990, as early as 1900.
+  - memo_code marks a memo amount whose date and amount are informational only.  # official: field description; checked 2026-11-26: 3,383 rows true
+  # checked 2026-11-26: 5,832 rows with calculated_amount below zero.
+  - calculated_amount can be negative.
+  - transaction_type flags third-party repayments (T), forgiven loans (F), returned amounts (R),
+    intermediaries (I), and transfers (X).  # official: field description
+  - filer_name is the committee name at the time of filing; the Filers dataset (4c8t-ngau) holds the
+    current name.  # official: filer_name description here and in 4c8t-ngau
+  # official: column list and field descriptions (transaction_city, transaction_state, transaction_zip).
+  - Contributor addresses carry city, state, and ZIP code only; the dataset has no street address column.
+  - district_1222 holds the 2012 to 2022 Board of Supervisors district for the transaction location.  # official: field description
+  - The nightly update starts at midnight Pacific, and the source advises viewing or downloading before
+    midnight or after 8am because data may be incomplete during the update.  # official: update process
+  - Fields copied from the Filings dataset can be blank when the copy fails; such rows join to their
+    filing through filing_activity_nid.  # official: update process; checked 2026-11-26: 0 rows blank
+- dataset_id: qizs-bwft
+  name: Campaign Finance Filings Received
+  # official: filing_activity_nid description ("Unique identifier for the submition of a filing
+  # (original, amendment, correction)") and filing_type description (Original, Amendment, Correction,
+  # Attachment Added); checked 2026-11-26: superseded versions remain as rows.
+  row_grain: One submission of a campaign filing (an original, an amendment, a correction, or added
+    attachments)
+  unique_key: filing_activity_nid  # official: primary key; checked 2026-11-26: 76,695 distinct of 76,695
+  default_time_field: filing_date  # official: date the filing was submitted
+  geography_fields: {}
+  # official: current_status description; checked 2026-11-26: 76,695 rows, 61,259 distinct filing_nid,
+  # 60,882 rows with current_status starting "Most Recent", 13,216 starting "Superseded by";
+  # checked 2026-11-27: the "Most Recent" rows hold 60,881 distinct filing_nid against 61,259 in all.
+  counting_guidance: count(*) counts submissions, including superseded versions. To count filings with
+    each original and its amendments once, use count(distinct filing_nid). Keeping only rows whose
+    current_status starts with "Most Recent" gives a smaller count, about 380 filings fewer in a
+    check, so do not mix the two methods in one comparison. Filter form_type to the forms you mean.
+  count_distinct_field: filing_nid  # official: unique identifier for the filing
+  # official: filing_nid and current_status descriptions
+  count_distinct_unit: distinct filings (an original and its amendments count once)
+  caveats:
+  - Campaign forms include FPPC forms 410, 450, 460, 461, 465, 470, 496, and 497, and SFEC forms 161,
+    162, and 163 are also recorded.  # official: summary
+  # checked 2026-11-26: 30 form_type values, including FPPC490 (2,999 rows), FPPC501 (1,951), and
+  # FPPC420 (1,511).
+  - Live data also holds form types the summary does not list, such as FPPC490, FPPC501, and FPPC420.
+  - Filings received on paper do not have corresponding data in the Transactions or Summary datasets.  # official: how to use
+  - Amendment filings supersede all transactions from the original filing and any prior amendments.  # official: how to use
+  - current_status gives the superseding filing if a filing is superseded, and a blank value means an
+    error during the sync update.  # official: field description; checked 2026-11-26: 1,929 rows blank
+  # checked 2026-11-26: 252 rows read "This electronic filing was submitted less than 7 days prior to a
+  # paper filing ..."; other rows read "This filing is the most recent amendment, but was submitted on
+  # paper within 7 days of an electronic filing ...". checked 2026-11-27: the full text says the filing
+  # covers the same period and names the filing whose data "is represented in the summary and
+  # transaction datasets".
+  - When a paper and an electronic filing for the same period arrive within 7 days, current_status says
+    which filing's data the Summary and Transactions datasets represent.
+  - A rejected filing is usually one made in error, under the wrong filing account, or with an error in
+    the reporting period; many are later rectified by a revised statement.  # official: how to use and rejected description; checked 2026-11-26: 164 rows true
+  - rendering_url is the URL of a PDF rendering of the filing, if available.  # official: field description
+  # checked 2026-11-26: GET on two netfile.com/Connect2/api/public/image/<filing_id_number> URLs (one
+  # electronic, one paper filing) returned HTTP 200 application/pdf; 36,718 rows have no rendering_url
+  # (36,323 paper); 1,496 AttachmentsAdded rows point to public.netfile.com/Pub2/AllFilingsByFiler.aspx.
+  - Both rendering_url links tested, of the form netfile.com/Connect2/api/public/image/<filing_id_number>,
+    returned the filing's PDF. Most paper filings have no rendering_url, and rows that only add
+    attachments link to a NetFile web page instead of a PDF.
+  - filer_name is the committee name at the time of filing; committees can change names.  # official: how to use
+  - fppc_id may be 'Pending' or blank if the committee has not yet received its id from the California
+    Secretary of State.  # official: field description
+  - filing_datetime records paper filings as midnight Pacific time on the filing date.  # official: field description
+  # checked 2026-11-26: earliest filing_date 1975-07-31 (paper FPPC420 rows).
+  - filing_date reaches back to 1975 for paper filings.
+  - The nightly update starts at midnight Pacific, and the source advises viewing or downloading before
+    midnight or after 8am.  # official: update process
+- dataset_id: 4c8t-ngau
+  name: Campaign Finance San Francisco Campaign Filers
+  # official: summary and filer_nid description.
+  row_grain: One campaign committee or non-committee campaign finance filer in the Ethics Commission's
+    records database, active or terminated
+  unique_key: filer_nid  # official: primary key; checked 2026-11-26: 5,318 distinct of 5,318
+  geography_fields: {}
+  # checked 2026-11-26: 5,318 rows, 3,571 distinct fppc_id, 645 rows with fppc_id blank or 'Pending'.
+  counting_guidance: count(*) counts filers. Filter on status or is_terminated before counting active
+    committees, and on filer_type for a kind of filer.
+  caveats:
+  - The nightly script replaces the dataset with a complete list of all filers.  # official: update process
+  - filer_name is the most current version of a committee name as registered with the Ethics
+    Commission.  # official: how to use
+  - Committees are generally only required to register with the Ethics Commission if they participate
+    in local elections.  # official: how to use
+  - fppc_id may appear as 'pending' until the committee files a courtesy copy of its Secretary of State
+    registration with the Ethics Commission.  # official: how to use
+  # checked 2026-11-26: status values ACTIVE, ANNUAL, TERMINATED, NR, NONSF; 2 rows ACTIVE with
+  # is_terminated true. official: the status description ("Status of committee") defines no codes.
+  - status holds codes the dataset does not define (NR, NONSF, ANNUAL), and a few ACTIVE rows have
+    is_terminated set to true.
+  - is_terminated tells whether the filer is terminated as of the data_as_of date.  # official: field description
+- dataset_id: 9ggq-m8hp
+  name: Campaign Finance Summary Totals
+  row_grain: One electronically filed FPPC Form 450, 460, 461, or 465, with the figures from its summary
+    page  # official: summary and filing_nid description
+  unique_key: filing_nid  # official: primary key; checked 2026-11-26: 17,935 distinct of 17,935
+  geography_fields: {}
+  # official: line descriptions; checked 2026-11-26: FPPC460 15,780 rows, FPPC461 1,486, FPPC465 632,
+  # FPPC450 37.
+  counting_guidance: Filter form_type before reading any line, because each line column means different
+    things on different forms. On Form 460, column A is this period and column B is calendar year to
+    date.
+  caveats:
+  - Transactions from rejected and superseded filings are not included.  # official: how to use
+  - If a committee files an amendment, its data completely replaces the original and earlier amendments.  # official: how the dataset is created
+  - A row with no sync_flag value most likely means the latest filing was submitted on paper and amended
+    an electronic filing; the Ethics Commission is working on how to handle these cases.  # official: how to use and sync_flag description; checked 2026-11-26: 129 rows blank
+  - Paper filings have no data in this dataset.  # official: qizs-bwft how to use
+  - start_date and end_date bound the filing period; filing_date is when the filing was submitted.  # official: field descriptions
+  - The nightly update starts at midnight Pacific, and the source advises viewing or downloading before
+    midnight or after 8am.  # official: update process
+- dataset_id: b947-pj2q
+  name: Lobbyist Directory
+  row_grain: One lobbyist registered with the Ethics Commission  # official: summary
+  unique_key: filerusername  # official: unique id for lobbyist; checked 2026-11-26: 654 distinct of 654
+  geography_fields: {}
+  # checked 2026-11-26: 654 rows; 624 contact, 29 expenditure, 1 blank lobbyisttype.
+  counting_guidance: count(*) counts registered lobbyists since 2018. Filter lobbyisttype for contact or
+    expenditure lobbyists.
+  caveats:
+  - Lobbyists active only before 2018 did not file a registration statement and do not appear here;
+    their filings and activities still appear in the other lobbyist datasets.  # official: summary
+  - Only the most recent firm for a lobbyist is displayed.  # official: how to use
+  - Contact and expenditure lobbyists both appear.  # official: summary
+  - A sync script checks nightly for new filings.  # official: update process
+- dataset_id: vckx-s5ks
+  name: Lobbyist Filings Directory
+  row_grain: One lobbyist statement filed with the Ethics Commission  # official: summary
+  unique_key: id  # official: unique id for filing; checked 2026-11-26: 37,687 distinct of 37,687
+  default_time_field: filingdate  # official: date filing was received
+  geography_fields: {}
+  # official: how to use; checked 2026-11-26: 4,374 rows with issuperceded true.
+  counting_guidance: count(*) counts statements, including superseded ones. Filter issuperceded = false
+    to count only statements in force.
+  caveats:
+  - The dataset holds the metadata for all filings received, and an amendment supersedes the content of
+    the original filing.  # official: how to use
+  - amends gives the filing id an amendment replaces.  # official: field description
+  - startdate and enddate bound the period the filing covers; filingdate is when it was received.  # official: field descriptions
+  # official: field description; checked 2026-11-26: GET on a document URL returned HTTP 403 with a
+  # page titled "Just a moment...".
+  - document is the URL for a print view of the filing. In a check, the link answered a program's
+    request with a challenge page instead of the filing.
+  # checked 2026-11-26: filingtype values Monthly, Registration, Employment; earliest filingdate 2010-02-08.
+  - filingtype holds Monthly, Registration, and a few Employment statements.
+  - A sync script checks nightly for new filings.  # official: update process
+- dataset_id: s4ub-8j3t
+  name: Lobbyist Activity Directory
+  row_grain: One activity reported by a registered lobbyist on a monthly statement  # official: summary and id description
+  unique_key: id  # official: unique id for activity; checked 2026-11-26: 124,020 distinct of 124,020
+  default_time_field: date  # official: activity date
+  geography_fields: {}
+  # official: type description; checked 2026-11-26: ContactOfPublicOfficial 66,974 rows,
+  # PaymentReceived 53,151, CampaignContributionMade 3,157, others under 330 each.
+  counting_guidance: Filter type before counting or summing; rows of every activity type are combined,
+    and amount means something different for each type.
+  caveats:
+  - Activities are self-reported by lobbyists on monthly statements, and both contact and expenditure
+    lobbyists are combined.  # official: summary and how to use
+  - The source points to filtered views by activity type for analysis.  # official: how to use
+  # checked 2026-11-26: the date column is typed as text; all 124,020 values start YYYY-MM-DD.
+  # checked 2026-11-27: date_trunc_ym(date) answered a type-mismatch error; date >= '2026-01-01'
+  # AND date < '2026-02-01' returned a count.
+  - date is stored as text, not as a date column. Date functions such as date_trunc_ym fail on it;
+    compare it as YYYY-MM-DD text, for example date >= '2026-01-01' AND date < '2026-02-01'.
+  # checked 2026-11-26: five superseded monthly statements in vckx-s5ks had no activity rows here;
+  # three of the four statements that amended them had rows.
+  - In a spot check, five superseded statements had no activity rows, and three of the four statements
+    that amended them did.
+  # checked 2026-11-26: dataset rows last updated 2026-11-19 while vckx-s5ks was updated 2026-11-24;
+  # a statement filed 2026-11-20 had no activity rows.
+  - This dataset can lag the Lobbyist Filings Directory by several days.
+  - fromfiling gives the filing id the activity was reported on.  # official: field description
+- dataset_id: iv34-5p9x
+  name: SFEC Campaign Consultant Report
+  # official: summary and how the dataset is created; checked 2026-11-26: envelope_id is the portal's
+  # row identifier.
+  row_grain: One electronically filed campaign consultant report (registration, re-registration,
+    quarterly disclosure, or termination)
+  unique_key: envelope_id  # checked 2026-11-26: 307 distinct of 307
+  default_time_field: datesigned  # official: timestamp of DocuSign signature
+  geography_fields: {}
+  # official: how to use (which columns hold data depends on ReportType); checked 2026-11-26: four report
+  # types (Quarterly Report, Reregistration, Termination Report, Initial Registration); 6 filing series
+  # with 2 rows, 5 of them an original plus an amendment.
+  counting_guidance: Filter filinginformation_reporttype before counting reports. Originals and
+    amendments are separate rows, so totals summed across rows count an amended report twice.
+  caveats:
+  - The source names "Entry Id" as the unique row identifier, but the dataset has no such column.  # checked 2026-11-26: column list; official: how to use
+  - Not all columns hold data for every report type.  # official: how to use
+  - The source says the dataset contains reports filed starting from 2025, when electronic filing of
+    campaign consultant reports is required.  # official: how the dataset is created
+  # checked 2026-11-26: earliest datesigned 2024-12-09.
+  - The earliest reports were signed on 2024-12-09.
+  - docusign_filing links the signed PDF of the filing.  # official: field description; checked 2026-11-26: HTTP 200 application/pdf
+  - The dataset is updated as needed when reports are submitted and signed.  # official: update process
+- dataset_id: vhmd-43ef
+  name: SFEC Campaign Consultant Report - Clients Joined View
+  # official: entry_id description and view description (a joined view of the report and its clients).
+  row_grain: One client entry on a campaign consultant report, with the report's fields attached
+  unique_key: sfeccampaignconsultantreportclients_entry_id  # checked 2026-11-26: 247 distinct of 247
+  default_time_field: datesigned  # official: timestamp of DocuSign signature
+  geography_fields: {}
+  # checked 2026-11-26: 247 rows from 160 reports; 6 rows from amendment reports; 57 reports have
+  # more than one client row, and none of them shows more than one clientinformation_total value.
+  counting_guidance: Sum sfeccampaignconsultantreportclients_clientlist_economicconsiderationreceived
+    for client payments. clientinformation_total repeats the report total on every client row, so do not
+    sum it.
+  caveats:
+  - The economic consideration column is what the consultant received from that client for consulting
+    services.  # official: field description
+  - clientinformation_total is the report's total economic consideration received from clients.  # official: field description
+  - filinginformation_filingtype marks original and amendment reports.  # official: field description
+  - Electronic filing starts on December 9, 2024.  # official: SFEC Campaign Consultant Report - Clients (m75g-xpci) summary
+- dataset_id: jwj8-tzqw
+  name: SFEC Campaign Consultant Report - Political Contributions Joined View
+  # official: entry_id description and view description.
+  row_grain: One political contribution entry on a campaign consultant report, with the report's fields
+    attached
+  unique_key: sfeccampaignconsultantreportpoliticalcontributions_entry_id  # checked 2026-11-26: 35 distinct of 35
+  default_time_field: sfeccampaignconsultantreportpoliticalcontributions_contributionlist_dateofcontribution  # official: contribution date
+  geography_fields: {}
+  # checked 2026-11-26: 35 rows from 27 reports; 3 rows from amendment reports.
+  counting_guidance: count(*) counts contribution entries. Sum
+    sfeccampaignconsultantreportpoliticalcontributions_contributionlist_amountofcontribution for amounts.
+  caveats:
+  - The contributor column names the individual or entity that was the true source of the contribution,
+    and the recipient column names a committee or a candidate without a committee.  # official: field descriptions
+  - The report covers contributions the consultant made, delivered, or acted as agent or intermediary for
+    in support of or opposition to a city candidate or ballot measure.  # official: iv34-5p9x field description
+  - datesigned is when the report was signed; the contribution date column is when the contribution was
+    made.  # official: field descriptions
+- dataset_id: acwz-2ua3
+  name: SFEC Campaign Consultant Client Authorization and Termination Statement
+  row_grain: One client authorization or termination statement  # official: summary and how to use
+  unique_key: envelope_id  # official: unique row identifier; checked 2026-11-26: 150 distinct of 150
+  default_time_field: datesigned  # official: timestamp of signature
+  geography_fields: {}
+  # checked 2026-11-26: Authorization 78 rows (1 amendment), Termination 72 (1 amendment).
+  counting_guidance: Filter filinginformation_typeofstatement to Authorization or Termination before
+    counting. Amendments are separate rows.
+  caveats:
+  - An authorization statement must be filed no later than 15 days after a client retains the
+    consultant, and a termination statement within 30 days after services end.  # official: summary
+  - campaignconsultantinformation_startdate is the client's authorization date and
+    campaignconsultantinformation_terminationdate the termination date; datesigned is when the statement
+    was signed.  # official: field descriptions
+  - Data starts with electronic filings on December 9, 2024.  # official: how the dataset is created
+  - Not all columns hold data for each type of statement.  # official: how to use
 - dataset_id: g8m3-pdis
   name: Registered Business Locations - San Francisco
   row_grain: One business location registered with the Treasurer and Tax Collector  # official: summary

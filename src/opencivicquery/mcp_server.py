@@ -13,7 +13,7 @@ from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, SecretStr, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -500,12 +500,24 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
     )
     offered: list[str] = []
 
-    def tool(*, name: str, description: str) -> Callable[[Any], Any]:
-        """Register a tool, or skip it when settings.tools names others."""
+    def tool(*, name: str, description: str, read_only: bool = True) -> Callable[[Any], Any]:
+        """Register a tool, or skip it when settings.tools names others.
+
+        Every tool but pin_snapshot only reads records. The evidence snapshot a lookup saves is
+        this server's own record of what it read, so it does not count as a change. Clients
+        such as Claude's Cowork ask the user before each call of a tool that does not declare
+        itself read-only, so the declaration is what lets a lookup run without a prompt.
+        pin_snapshot keeps a snapshot past its normal expiry at the caller's request, so it
+        declares itself not read-only and stays behind the client's approval step.
+        """
         offered.append(name)
         if settings.tools and name not in settings.tools:
             return lambda function: function
-        return server.tool(name=name, description=description)
+        return server.tool(
+            name=name,
+            description=description,
+            annotations=ToolAnnotations(readOnlyHint=read_only, destructiveHint=False),
+        )
 
     @tool(
         name="list_source_packs",
@@ -1467,6 +1479,7 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             "Preserve a temporary query snapshot indefinitely for a published story. Use the "
             "snapshot URI that a query or lookup tool returned."
         ),
+        read_only=False,
     )
     async def pin_snapshot(
         snapshot_uri: Annotated[str, SNAPSHOT_URI_FIELD], ctx: Context[AppState]

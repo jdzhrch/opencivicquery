@@ -325,7 +325,12 @@ async def test_an_agency_outside_the_copy_is_refused_with_the_covered_names() ->
     assert "covers only these agencies: Police Commission; Office of the Mayor" in (
         caught.value.public_message
     )
+    days = sorted({agency.copied_at.date().isoformat() for agency in made.agencies})
+    assert f"daily copy, taken on {days[0]}" in caught.value.public_message or (
+        f"daily copy, taken between {days[0]} and {days[-1]}" in caught.value.public_message
+    )
     assert EXTENSION_URL in caught.value.public_message
+    assert EXTENSION_URL.endswith("/releases/latest/download/opencivicquery-sfgov.mcpb")
 
 
 @pytest.mark.asyncio
