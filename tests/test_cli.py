@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from opencivicquery import cli
 from opencivicquery.cli import _usage
 
 
@@ -62,3 +63,73 @@ def test_usage_rejects_filter_injection(project: str, actor: str | None) -> None
 
     with pytest.raises(SystemExit, match="Invalid"):
         _usage(args)
+
+
+SECRET = "fake key material: not-a-real-key"
+
+
+def _copy_args(*extra: str) -> argparse.Namespace:
+    return cli.build_parser().parse_args(["sfgov-copy", *extra])
+
+
+def test_a_key_on_standard_input_signs_in_the_bucket_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.cloud import storage
+    from google.oauth2 import service_account
+
+    key = {"type": "service_account", "project_id": "demo-project", "private_key": SECRET}
+    seen: dict[str, object] = {}
+
+    def from_info(info: dict[str, object]) -> str:
+        seen["info"] = info
+        return "signed-in"
+
+    def client(**kwargs: object) -> str:
+        seen["client"] = kwargs
+        return "client"
+
+    async def run(args: argparse.Namespace, client: object = None) -> int:
+        seen["store_client"] = client
+        return 0
+
+    monkeypatch.setattr(service_account.Credentials, "from_service_account_info", from_info)
+    monkeypatch.setattr(storage, "Client", client)
+    monkeypatch.setattr(cli, "_run_sfgov_copy", run)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(key)))
+
+    assert cli._sfgov_copy(_copy_args("--bucket", "b", "--key-stdin")) == 0
+    assert seen["info"] == key
+    assert seen["client"] == {"project": "demo-project", "credentials": "signed-in"}
+    assert seen["store_client"] == "client"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "not json " + SECRET,
+        json.dumps({"type": "authorized_user", "private_key": SECRET}),
+        json.dumps({"type": "service_account", "private_key": SECRET}),
+    ],
+)
+def test_a_bad_key_is_refused_without_repeating_it(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(text))
+
+    with pytest.raises(SystemExit) as caught:
+        cli._sfgov_copy(_copy_args("--bucket", "b", "--key-stdin"))
+
+    message = str(caught.value)
+    assert message.startswith("--key-stdin:")
+    assert "not-a-real-key" not in message
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None or caught.value.__suppress_context__
+
+
+def test_a_key_on_standard_input_needs_a_bucket() -> None:
+    with pytest.raises(SystemExit) as caught:
+        cli._sfgov_copy(_copy_args("--path", "x", "--key-stdin"))
+
+    assert "--bucket" in str(caught.value)

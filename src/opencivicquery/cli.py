@@ -5,11 +5,14 @@ import asyncio
 import json
 import re
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _ACTOR_EMAIL = re.compile(r"^[^@\s\"]+@[^@\s\"]+$")
+_MAX_KEY_BYTES = 64 * 1024
 
 
 def _usage(args: argparse.Namespace) -> int:
@@ -47,7 +50,30 @@ def _usage(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _run_sfgov_copy(args: argparse.Namespace) -> int:
+def _key_client(text: str) -> Any:
+    """A storage client signed in with a service account key given as JSON text.
+
+    Errors never repeat the text, which holds a private key.
+    """
+    from google.cloud import storage
+    from google.oauth2 import service_account
+
+    refused = "--key-stdin: standard input did not hold a JSON service account key"
+    try:
+        info = json.loads(text)
+    except ValueError:
+        raise SystemExit(refused) from None
+    if not isinstance(info, dict) or info.get("type") != "service_account":
+        raise SystemExit(refused)
+    try:
+        credentials = service_account.Credentials.from_service_account_info(info)
+    except Exception:
+        # Whatever the key's flaw, the message must not carry any of it.
+        raise SystemExit(refused) from None
+    return storage.Client(project=info.get("project_id"), credentials=credentials)
+
+
+async def _run_sfgov_copy(args: argparse.Namespace, client: Any = None) -> int:
     # Imported here so the usage command never loads the source modules.
     from opencivicquery.sources.base import SourceError
     from opencivicquery.sources.sfgov import SfGov
@@ -63,7 +89,9 @@ async def _run_sfgov_copy(args: argparse.Namespace) -> int:
         sync_copy,
     )
 
-    store = GcsCopyStore(args.bucket) if args.bucket else LocalCopyStore(Path(args.path))
+    store = (
+        GcsCopyStore(args.bucket, client=client) if args.bucket else LocalCopyStore(Path(args.path))
+    )
     names = args.agency or list(DEFAULT_AGENCIES)
     data = await store.read()
     previous = None
@@ -112,7 +140,12 @@ def _sfgov_copy(args: argparse.Namespace) -> int:
     if args.sample is not None and args.bucket:
         # A sample copy is partial; it must never replace the copy a server answers from.
         raise SystemExit("A sample run writes only to a local --path")
-    return asyncio.run(_run_sfgov_copy(args))
+    client = None
+    if args.key_stdin:
+        if not args.bucket:
+            raise SystemExit("--key-stdin is for --bucket")
+        client = _key_client(sys.stdin.read(_MAX_KEY_BYTES))
+    return asyncio.run(_run_sfgov_copy(args, client))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,6 +177,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan",
         action="store_true",
         help="Only count what a full read would fetch, and write nothing",
+    )
+    copy.add_argument(
+        "--key-stdin",
+        action="store_true",
+        help=(
+            "Write to the bucket with a service account key read as JSON from standard input, "
+            "so the key never has to sit in a file. Default: Application Default Credentials."
+        ),
     )
     copy.set_defaults(handler=_sfgov_copy)
     return parser
