@@ -125,7 +125,8 @@ MAX_STORED_BYTES = 16 * 1024 * 1024
 MAX_TEXT_FAILURES_IN_A_ROW = 5
 # Our own bound: one news page whose text cannot be read is skipped, but five in a row mean
 # the site stopped answering, and the agency's read stops instead of waiting out every page.
-EXTENSION_URL = f"{PROJECT_URL}#sfgov-on-claude-desktop"
+# The extension is published as this repository's latest release.
+EXTENSION_URL = f"{PROJECT_URL}/releases/latest"
 
 NO_COPY_MEETINGS_WARNING = (
     "No meeting page in the copy matched these dates. This shows only what SF.gov listed for "

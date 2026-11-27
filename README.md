@@ -123,7 +123,7 @@ The OpenCivicQuery SF.gov extension runs the four SF.gov tools, and the two snap
 
 To install it:
 
-1. Download `opencivicquery-sfgov-<version>.mcpb` from the project's [releases](https://github.com/jdzhrch/opencivicquery/releases), or build it as shown below.
+1. Download `opencivicquery-sfgov-<version>.mcpb` from the [latest release](https://github.com/jdzhrch/opencivicquery/releases/latest), or build it as shown below.
 2. Double-click the file, or drag it into the Claude Desktop window. You can also open Settings, Extensions, Advanced settings, Install Extension, and choose the file.
 3. Click Install, then ask a question about an SF.gov agency, such as "What did the Mayor's office announce last week?"
 
@@ -135,7 +135,7 @@ To build the file from this repository:
 uv run python scripts/build_sfgov_extension.py --validate --smoke
 ```
 
-The file lands in `dist/`. `--validate` checks the manifest with the official MCPB tool and needs Node.js; `--smoke` unpacks the file, starts its server, and lists its tools.
+The file lands in `dist/`. `--validate` checks the manifest with the official MCPB tool and needs Node.js; `--smoke` unpacks the file, starts its server, and lists its tools. Each version is published as this repository's latest release, tagged `sfgov-desktop-v<version>`, because answers from the public instance's daily copy link to `releases/latest`.
 
 ## Federal court opinions
 
