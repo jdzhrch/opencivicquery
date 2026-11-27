@@ -35,6 +35,9 @@ EXPECTED_TOOLS = {
     "search_court_opinions",
     "search_nonprofits",
     "get_nonprofit_filings",
+    "find_sfgov_news",
+    "find_sfgov_meetings",
+    "search_sfgov",
     "get_census_data",
     "pin_snapshot",
     "get_snapshot",
@@ -50,6 +53,9 @@ LOOKUP_TOOLS = (
     "search_court_opinions",
     "search_nonprofits",
     "get_nonprofit_filings",
+    "find_sfgov_news",
+    "find_sfgov_meetings",
+    "search_sfgov",
     "get_census_data",
 )
 

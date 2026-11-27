@@ -20,6 +20,7 @@ from opencivicquery.snapshots import FileSnapshotStore, SnapshotError
 from opencivicquery.sources.census_geocoder import CensusGeocoder
 from opencivicquery.sources.legistar import Legistar
 from opencivicquery.sources.sec_edgar import SecEdgar
+from opencivicquery.sources.sfgov import SfGov
 from opencivicquery.sources.socrata import SocrataError, SocrataNetwork
 
 CATALOG_HOST = "api.us.socrata.com"
@@ -1283,3 +1284,320 @@ async def test_sec_filings_without_a_contact_refuse_without_a_request(
     assert event["action"] == "find_sec_filings"
     assert event["status"] == "error"
     assert event["domain"] == "data.sec.gov"
+
+
+SFGOV_FIXTURES = Path(__file__).parent / "fixtures" / "sfgov"
+
+
+def sfgov_fixture(name: str) -> dict[str, Any]:
+    """A response recorded from api.sf.gov on 2026-11-26, long text trimmed."""
+    return json.loads((SFGOV_FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def patch_sfgov(
+    monkeypatch: pytest.MonkeyPatch,
+    route: Callable[[httpx.Request], httpx.Response] | None = None,
+) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+    """Answer SF.gov requests from the recorded fixtures, or from route when given."""
+    requests: list[httpx.Request] = []
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        if request.url.path == "/api/v2/documents/":
+            name = "search_documents"
+        elif params.get("type") == "sf.Agency":
+            words = params["search"].casefold()
+            name = (
+                "agency_search_police_commission"
+                if "police" in words
+                else ("agency_search_mayor_office")
+            )
+        elif params.get("type") == "sf.News":
+            name = "news_mayor"
+        elif params.get("type") == "sf.Meeting":
+            name = "meetings_police_commission"
+        else:
+            name = "search_pages"
+        return httpx.Response(200, json=sfgov_fixture(name))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return (route or recorded)(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(mcp_server, "SfGov", lambda: SfGov(client=client, min_request_interval=0))
+    return client, requests
+
+
+@pytest.mark.asyncio
+async def test_sfgov_tools_return_evidence_over_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sfgov_client, sfgov_requests = patch_sfgov(monkeypatch)
+    server, http_client, socrata_requests, logger_name = build_test_server(
+        monkeypatch, write_deployment, tmp_path
+    )
+    caplog.set_level(logging.INFO, logger=logger_name)
+    try:
+        async with Client(server, mode="legacy") as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            news = await client.call_tool(
+                "find_sfgov_news",
+                {
+                    "agency": " office of the mayor ",
+                    "start_date": "2026-11-24",
+                    "end_date": "2026-11-30",
+                    "reporter_question": "What did the Mayor announce this week?",
+                },
+            )
+            meetings = await client.call_tool(
+                "find_sfgov_meetings",
+                {
+                    "agency": "Police Commission",
+                    "start_date": "2025-01-01",
+                    "end_date": "2025-12-31",
+                    "reporter_question": "When did the Police Commission meet in 2025?",
+                },
+            )
+            pages = await client.call_tool(
+                "search_sfgov",
+                {"text": "Point-in-Time count", "reporter_question": "Find the PIT count report"},
+            )
+            documents = await client.call_tool(
+                "search_sfgov",
+                {
+                    "text": "point in time count",
+                    "kind": "documents",
+                    "reporter_question": "Find the PIT count report file",
+                },
+            )
+            stored = await client.call_tool(
+                "get_snapshot", {"snapshot_uri": meetings.structured_content["snapshot"]["uri"]}
+            )
+    finally:
+        await http_client.aclose()
+        await sfgov_client.aclose()
+
+    news_schema = tools["find_sfgov_news"].input_schema
+    assert "agency" not in news_schema["required"]
+    assert {"start_date", "end_date", "reporter_question"} <= set(news_schema["required"])
+    assert "agency" in tools["find_sfgov_meetings"].input_schema["required"]
+    assert tools["search_sfgov"].input_schema["properties"]["kind"]["enum"] == [
+        "pages",
+        "documents",
+    ]
+    for result in (news, meetings, pages, documents):
+        assert result.is_error is False
+        payload = result.structured_content
+        QueryResponse.model_validate(payload)
+        assert payload["domain"] == "api.sf.gov"
+        assert payload["snapshot"]["uri"].startswith("file://")
+        assert payload["query_url"].startswith("https://api.sf.gov/api/v2/")
+        assert payload["source_updated_at"] is None
+        assert payload["presentation_rules"]
+    assert {request.url.host for request in sfgov_requests} == {"api.sf.gov"}
+    assert all(
+        request.headers["User-Agent"].startswith("OpenCivicQuery/") for request in sfgov_requests
+    )
+    assert socrata_requests == []
+
+    payload = news.structured_content
+    assert payload["dataset_name"] == "SF.gov news: Office of the Mayor, 2026-11-24 to 2026-11-30"
+    assert payload["completeness"] == "complete"
+    assert [row["page_id"] for row in payload["rows"]] == [110692]
+    assert payload["methodology"]["row_grain"].startswith("One English news page")
+    assert any("primary agency" in warning for warning in payload["warnings"])
+    assert any(rule.startswith("Link each row") for rule in payload["presentation_rules"])
+
+    payload = meetings.structured_content
+    assert payload["completeness"] == "complete"
+    assert [row["meeting_date"] for row in payload["rows"]] == [
+        "2025-10-22",
+        "2025-09-03",
+        "2025-08-27",
+        "2025-08-13",
+        None,
+    ]
+    assert payload["rows"][0]["end_date"] == "2025-10-29"
+    assert payload["rows"][1]["documents"][0]["url"].startswith("https://media.api.sf.gov/")
+    assert payload["warnings"][0].startswith("1 meeting page(s) of this body carry no date")
+    # The snapshot keeps the nested document and video lists as the answer gave them.
+    assert stored.is_error is False
+    assert stored.structured_content["rows"] == payload["rows"]
+    assert stored.structured_content["warnings"] == payload["warnings"]
+
+    payload = pages.structured_content
+    assert payload["completeness"] == "truncated"
+    assert payload["returned_row_count"] == 8
+    assert payload["rows"][0]["page_url"].startswith("https://www.sf.gov/")
+    assert payload["warnings"][0].startswith("PARTIAL: 9 pages match")
+    assert any(
+        rule.startswith("PARTIAL") or "partial" in rule.lower()
+        for rule in (payload["presentation_rules"])
+    )
+    assert documents.structured_content["rows"][0]["file_url"].startswith(
+        "https://media.api.sf.gov/documents/"
+    )
+
+    events = [event for event in audit_events(caplog, logger_name) if "sfgov" in event["action"]]
+    assert [event["action"] for event in events] == [
+        "find_sfgov_news",
+        "find_sfgov_meetings",
+        "search_sfgov",
+        "search_sfgov",
+    ]
+    assert all(event["status"] == "success" and event["domain"] == "api.sf.gov" for event in events)
+    assert events[0]["arguments"] == {
+        "agency": "office of the mayor",
+        "start_date": "2026-11-24",
+        "end_date": "2026-11-30",
+    }
+    assert events[2]["arguments"] == {"text": "Point in Time count", "kind": "pages"}
+    assert events[0]["reporter_question"] == "What did the Mayor announce this week?"
+
+
+@pytest.mark.asyncio
+async def test_sfgov_refusals_and_failures_are_tool_errors_without_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sfgov_client, sfgov_requests = patch_sfgov(monkeypatch)
+    server, http_client, _, logger_name = build_test_server(monkeypatch, write_deployment, tmp_path)
+    caplog.set_level(logging.INFO, logger=logger_name)
+    question = {"reporter_question": "SF.gov refusal test"}
+    dates = {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    try:
+        async with Client(server, mode="legacy") as client:
+            bad_date = await client.call_tool(
+                "find_sfgov_news", question | {"start_date": "2026-10-32", "end_date": "2026-10-31"}
+            )
+            bad_text = await client.call_tool("search_sfgov", question | {"text": "?!"})
+            bad_kind = await client.call_tool(
+                "search_sfgov", question | {"text": "budget", "kind": "images"}
+            )
+            no_agency = await client.call_tool("find_sfgov_meetings", question | dates)
+            blank_agency = await client.call_tool(
+                "find_sfgov_meetings", question | dates | {"agency": ""}
+            )
+            sent_before_lookup = len(sfgov_requests)
+            inexact = await client.call_tool(
+                "find_sfgov_news", question | dates | {"agency": "Mayor\u2019s office"}
+            )
+            empty_agency = await client.call_tool(
+                "find_sfgov_news", question | dates | {"agency": ""}
+            )
+    finally:
+        await http_client.aclose()
+        await sfgov_client.aclose()
+
+    assert sent_before_lookup == 0
+    # A required agency sent empty gets the source's own typed refusal, like any bad name.
+    for refused, argument in (
+        (bad_date, "start_date"),
+        (bad_text, "text"),
+        (blank_agency, "agency"),
+    ):
+        assert refused.is_error is True
+        error = refused.structured_content["error"]
+        assert error["code"] == "INVALID_QUERY_ARGUMENT" and error["argument"] == argument
+    assert bad_kind.is_error is True
+    assert no_agency.is_error is True
+    assert inexact.is_error is True
+    error = inexact.structured_content["error"]
+    assert error["code"] == "NOT_FOUND" and error["argument"] == "agency"
+    assert "Office of the Mayor; Mayor's Office of Innovation" in error["message"]
+    # An empty agency means every agency: one request, no agency lookup.
+    assert empty_agency.is_error is False
+    assert empty_agency.structured_content["dataset_name"].startswith("SF.gov news: all agencies")
+    assert [request.url.params["type"] for request in sfgov_requests] == ["sf.Agency", "sf.News"]
+    assert len(list((tmp_path / "snapshots").rglob("*.json"))) == 1
+    events = [event for event in audit_events(caplog, logger_name) if "sfgov" in event["action"]]
+    assert [event["status"] for event in events] == ["error"] * 4 + ["success"]
+    assert [event["error_type"] for event in events[:4]] == [
+        "INVALID_QUERY_ARGUMENT",
+        "INVALID_QUERY_ARGUMENT",
+        "INVALID_QUERY_ARGUMENT",
+        "NOT_FOUND",
+    ]
+    # Refusals are filed under the SF.gov host too, not under another source's.
+    assert all(event["domain"] == "api.sf.gov" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_sfgov_slow_down_pauses_lookups_without_spending_allowances(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    sfgov_client, sfgov_requests = patch_sfgov(
+        monkeypatch, lambda _: httpx.Response(429, text="Too many requests")
+    )
+    server, http_client, _, _ = build_test_server(
+        monkeypatch,
+        write_deployment,
+        tmp_path,
+        limits={"daily_requests": 2, "per_portal_per_minute": 100},
+    )
+    arguments = {"text": "budget", "reporter_question": "SF.gov slow-down test"}
+    dates = {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    try:
+        async with Client(server, mode="legacy") as client:
+            limited = await client.call_tool("search_sfgov", arguments)
+            paused = [
+                await client.call_tool("search_sfgov", arguments),
+                await client.call_tool(
+                    "find_sfgov_news", dates | {"reporter_question": "SF.gov slow-down test"}
+                ),
+                await client.call_tool(
+                    "find_sfgov_meetings",
+                    dates | {"agency": "Police Commission", "reporter_question": "slow-down"},
+                ),
+            ]
+    finally:
+        await http_client.aclose()
+        await sfgov_client.aclose()
+
+    error = limited.structured_content["error"]
+    assert limited.is_error is True
+    assert error["code"] == "SOURCE_RATE_LIMITED" and error["http_status"] == 429
+    assert "was not retried" in error["message"] and "Try again in a minute" in error["message"]
+    # The pause covers all three tools. With a daily allowance of two, a third call that
+    # spent one would answer DAILY_LIMIT_REACHED; these never spend one and send nothing.
+    for result in paused:
+        assert result.is_error is True
+        error = result.structured_content["error"]
+        assert error["code"] == "SOURCE_RATE_LIMITED" and error["http_status"] is None
+        assert "was not sent. Try again in about" in error["message"]
+    assert len(sfgov_requests) == 1
+    assert not list((tmp_path / "snapshots").rglob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_an_sfgov_outage_is_a_tool_error_after_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    write_deployment: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    sfgov_client, sfgov_requests = patch_sfgov(
+        monkeypatch, lambda _: httpx.Response(503, text="<html>Service unavailable</html>")
+    )
+    server, http_client, _, _ = build_test_server(monkeypatch, write_deployment, tmp_path)
+    try:
+        async with Client(server, mode="legacy") as client:
+            down = await client.call_tool(
+                "search_sfgov", {"text": "budget", "reporter_question": "SF.gov outage test"}
+            )
+    finally:
+        await http_client.aclose()
+        await sfgov_client.aclose()
+
+    assert down.is_error is True
+    assert down.structured_content["error"]["code"] == "SOURCE_UNAVAILABLE"
+    assert "HTTP 503" in down.structured_content["error"]["message"]
+    assert len(sfgov_requests) == 1
+    assert not list((tmp_path / "snapshots").rglob("*.json"))

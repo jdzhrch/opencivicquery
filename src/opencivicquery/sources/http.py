@@ -16,8 +16,9 @@ DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 class FixedHostClient:
     """Send requests to URLs the connector builds itself, never to a caller's URL.
 
-    Redirects are not followed, so a source cannot steer a request to another host.
-    Responses are read in chunks and refused past a size cap.
+    Redirects are never followed, whatever the client it is given allows, so a source
+    cannot steer a request to another host. Responses are read in chunks and refused past a
+    size cap.
     """
 
     def __init__(
@@ -84,7 +85,7 @@ class FixedHostClient:
         if not any(name.lower() == "cookie" for name in headers or {}):
             request.headers.pop("cookie", None)
         try:
-            response = await self._client.send(request, stream=True)
+            response = await self._client.send(request, stream=True, follow_redirects=False)
             try:
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -121,7 +122,8 @@ class FixedHostClient:
         status, content = await self.send(method, url, params=params, json_body=json_body)
         try:
             payload = json.loads(content)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError: a body nested deeper than the parser's limit.
             payload = None
         if status == 200:
             if payload is None:

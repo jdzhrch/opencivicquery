@@ -45,6 +45,13 @@ SOURCE_NAME = "SF.gov pages API"
 MIN_REQUEST_INTERVAL_SECONDS = 1.0
 # Our own bound, not the source's: the interface sent no rate-limit header on 2026-11-26,
 # and this module keeps its volume low.
+RATE_LIMIT_PAUSE_SECONDS = 60.0
+# Our own bound: after the site answers HTTP 429, this process sends it nothing for a
+# minute and refuses lookups in that time. The request is never retried.
+QUEUE_WAIT_SECONDS = 20.0
+# Our own bound: a lookup waits this long for the lookups ahead of it in this process and
+# is then refused before it sends anything. Without it a lookup could leave the queue late,
+# send requests, and lose their answers to the service's 60-second deadline.
 
 NEWS_READ_LIMIT = 500
 # checked 2026-11-26: limit=500 returned 500 news items in one answer of about 540 KB, so
@@ -276,6 +283,47 @@ def _invalid(argument: str | None, message: str) -> SourceQueryError:
         code="INVALID_QUERY_ARGUMENT",
         argument=argument,
         public_message=message,
+    )
+
+
+def _slow_down() -> SourceQueryError:
+    """The retryable error for the request that the site answered with HTTP 429."""
+    return SourceQueryError(
+        f"{SOURCE_NAME} asked for fewer requests",
+        code="SOURCE_RATE_LIMITED",
+        http_status=429,
+        public_message=(
+            "SF.gov asked this server to slow down (HTTP 429). The request was not "
+            "retried, and this server process sends SF.gov nothing for "
+            f"{RATE_LIMIT_PAUSE_SECONDS:.0f} seconds after such an answer. Try again in a "
+            "minute."
+        ),
+    )
+
+
+def _paused(seconds_left: float) -> SourceQueryError:
+    """The retryable error for a lookup refused, unsent, during the pause after a 429."""
+    return SourceQueryError(
+        f"{SOURCE_NAME} lookups are paused",
+        code="SOURCE_RATE_LIMITED",
+        public_message=(
+            "SF.gov recently asked this server process to slow down, so this lookup was not "
+            f"sent. Try again in about {max(1, round(seconds_left))} seconds."
+        ),
+    )
+
+
+def _queue_full() -> SourceQueryError:
+    """The retryable error for a lookup that waited too long behind other lookups."""
+    return SourceQueryError(
+        f"{SOURCE_NAME} lookups are queued",
+        code="SOURCE_BUSY",
+        public_message=(
+            "This server runs one SF.gov lookup at a time, and other SF.gov lookups were "
+            "still ahead of this one after "
+            f"{QUEUE_WAIT_SECONDS:.0f} seconds. Nothing was sent to SF.gov. Try again "
+            "shortly, and call the SF.gov tools one at a time."
+        ),
     )
 
 
@@ -699,21 +747,43 @@ class SfGov:
         self._clock = clock
         self._sleep = sleep
         self._next_start = 0.0
+        self._paused_until = 0.0
         self._lookup_lock = asyncio.Lock()
 
     def _one_at_a_time(
         self, run: Callable[[], Awaitable[Lookup]]
     ) -> Callable[[], Awaitable[Lookup]]:
-        """Run lookups one after another, so a caller that gives up in the queue sent nothing."""
+        """Run lookups one after another in this process.
+
+        A lookup leaves the queue unsent in two ways only: its own wait budget runs out, or
+        the service's deadline cancels it. A caller that merely disconnects stays queued.
+        """
 
         async def queued() -> Lookup:
-            async with self._lookup_lock:
+            try:
+                async with asyncio.timeout(QUEUE_WAIT_SECONDS):
+                    await self._lookup_lock.acquire()
+            except TimeoutError as exc:
+                raise _queue_full() from exc
+            try:
                 return await run()
+            finally:
+                self._lookup_lock.release()
 
         return queued
 
+    def _refuse_while_paused(self) -> None:
+        """Refuse a lookup before it costs an allowance while the pause after a 429 runs."""
+        left = self._paused_until - self._clock()
+        if left > 0:
+            raise _paused(left)
+
     async def _get(self, url: str, params: dict[str, str]) -> Any:
-        """Send one request, at least the interval after the one before it ended."""
+        """Send one request, at least the interval after the one before it ended.
+
+        Nothing is sent while the pause that follows an HTTP 429 is running.
+        """
+        self._refuse_while_paused()
         wait = self._next_start - self._clock()
         if wait > 0:
             await self._sleep(wait)
@@ -722,6 +792,11 @@ class SfGov:
             # A lone surrogate from a JSON escape would fail later, when the snapshot is
             # written, so it is refused here.
             json.dumps(payload, ensure_ascii=False).encode()
+        except SourceQueryError as exc:
+            if exc.http_status != 429:
+                raise
+            self._paused_until = self._clock() + RATE_LIMIT_PAUSE_SECONDS
+            raise _slow_down() from exc
         except (UnicodeEncodeError, RecursionError) as exc:
             raise SourceError(f"The {SOURCE_NAME} returned text that cannot be stored") from exc
         finally:
@@ -804,6 +879,7 @@ class SfGov:
         # An empty agency means no agency filter, as an assistant may send "" for "none".
         blank = agency is None or (isinstance(agency, str) and not agency.strip())
         name = None if blank else validate_agency(agency)
+        self._refuse_while_paused()
 
         async def run() -> Lookup:
             found = await self._agency(name) if name is not None else None
@@ -872,6 +948,7 @@ class SfGov:
         """Validate one meeting lookup without touching the network and return it."""
         name = validate_agency(agency)
         first, last = _date_range(start_date, end_date)
+        self._refuse_while_paused()
 
         async def run() -> Lookup:
             found = await self._agency(name)
@@ -897,8 +974,13 @@ class SfGov:
                 if page and (
                     count != total or not batch or batch[0].get("id") != items[-1].get("id")
                 ):
-                    raise SourceError(
-                        f"The {SOURCE_NAME} meeting list changed while it was read. Try again."
+                    raise SourceQueryError(
+                        f"The {SOURCE_NAME} meeting list changed while it was read",
+                        code="SOURCE_UNAVAILABLE",
+                        public_message=(
+                            "SF.gov's list of meeting pages changed while it was read, so "
+                            "the result could not be trusted. Try again."
+                        ),
                     )
                 total = count
                 fresh = batch[1:] if page else batch
@@ -1012,6 +1094,7 @@ class SfGov:
         """Validate one title search without touching the network and return it."""
         words = validate_text(text)
         chosen = validate_kind(kind)
+        self._refuse_while_paused()
 
         async def run() -> Lookup:
             if chosen == "pages":

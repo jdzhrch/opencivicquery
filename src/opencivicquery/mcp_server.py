@@ -45,6 +45,9 @@ from opencivicquery.sources.sec_edgar import DEFAULT_LIMIT as SEC_DEFAULT_LIMIT
 from opencivicquery.sources.sec_edgar import MAX_COMPANY_LENGTH, MAX_FORM_TYPES, SecEdgar
 from opencivicquery.sources.sec_edgar import MAX_LIMIT as SEC_MAX_LIMIT
 from opencivicquery.sources.sec_edgar import SUBMISSIONS_HOST as SEC_HOST
+from opencivicquery.sources.sfgov import MAX_AGENCY_LENGTH as SFGOV_MAX_AGENCY
+from opencivicquery.sources.sfgov import MAX_TEXT_LENGTH as SFGOV_MAX_TEXT
+from opencivicquery.sources.sfgov import SFGOV_HOST, SfGov
 from opencivicquery.sources.socrata import SocrataNetwork
 from opencivicquery.sources.usaspending import DEFAULT_LIMIT as AWARDS_DEFAULT_LIMIT
 from opencivicquery.sources.usaspending import (
@@ -75,8 +78,9 @@ SERVER_INSTRUCTIONS = (
     "search_legislation. For a company's SEC filings, call find_sec_filings. For federal "
     "contracts, grants, and other awards, call search_federal_awards. For the text of federal "
     "court opinions, call search_court_opinions. For a tax-exempt organization's IRS Form "
-    "990 filings, call search_nonprofits and then get_nonprofit_filings. These tools follow "
-    "the same evidence rules.\n\n"
+    "990 filings, call search_nonprofits and then get_nonprofit_filings. For news, meeting "
+    "pages, and documents on San Francisco's city website, SF.gov, call find_sfgov_news, "
+    "find_sfgov_meetings, and search_sfgov. These tools follow the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -103,6 +107,7 @@ class AppState:
     govinfo: GovInfo | None = None
     census: CensusData | None = None
     nonprofits: NonprofitExplorer | None = None
+    sfgov: SfGov | None = None
     """Record sources that answer through OpenCivicQueryService.lookup. The lifespan
     builds and closes them; None only in tests that never call their tools."""
 
@@ -200,6 +205,20 @@ LEGISTAR_CLIENT_FIELD = Field(
 )
 
 DATE_FIELD = Field(description="A date as YYYY-MM-DD.", min_length=10, max_length=10)
+SFGOV_AGENCY_FIELD = Field(
+    description=(
+        "The department or public body exactly as SF.gov names it, such as Police "
+        "Commission or Office of the Mayor."
+    ),
+    max_length=SFGOV_MAX_AGENCY,
+)
+SFGOV_OPTIONAL_AGENCY_FIELD = Field(
+    description=(
+        "Optional. The department or public body exactly as SF.gov names it, such as "
+        "Office of the Mayor. Leave it out for every agency."
+    ),
+    max_length=SFGOV_MAX_AGENCY,
+)
 
 EVENT_GUID_FIELD = Field(
     description=(
@@ -421,6 +440,8 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             stack.push_async_callback(state.census.close)
             state.nonprofits = NonprofitExplorer()
             stack.push_async_callback(state.nonprofits.close)
+            state.sfgov = SfGov()
+            stack.push_async_callback(state.sfgov.close)
             if verifier is not None:
                 stack.push_async_callback(verifier.close)
             if proxy is not None:
@@ -1077,6 +1098,117 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             arguments=arguments,
             host=NONPROFITS_HOST,
             prepare=lambda state_: nonprofits(state_).get_filings(**arguments),
+        )
+
+    def sfgov(state: AppState) -> SfGov:
+        if state.sfgov is None:
+            raise RuntimeError("The SF.gov source was not built")
+        return state.sfgov
+
+    @server.tool(
+        name="find_sfgov_news",
+        description=(
+            "List news pages on SF.gov, San Francisco's city website, dated in a range, "
+            "newest first, for one agency or for all. Returns each page's date, title, "
+            "type label, summary, and public link. Give agency as the exact name SF.gov "
+            "uses, such as Office of the Mayor; an inexact name returns the names that "
+            "match instead of a guess. The lookup reads the 500 newest items and reports a "
+            "range it could not reach as partial. The server runs one SF.gov lookup at a "
+            "time, so call the SF.gov tools one after another. Same response shape and "
+            "rules as query_dataset."
+        ),
+    )
+    async def find_sfgov_news(
+        start_date: Annotated[str, DATE_FIELD],
+        end_date: Annotated[str, DATE_FIELD],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        agency: Annotated[str | None, SFGOV_OPTIONAL_AGENCY_FIELD] = None,
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"agency": agency, "start_date": start_date, "end_date": end_date}
+        return await run_lookup(
+            ctx,
+            action="find_sfgov_news",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=SFGOV_HOST,
+            prepare=lambda state_: sfgov(state_).find_news(**arguments),
+        )
+
+    @server.tool(
+        name="find_sfgov_meetings",
+        description=(
+            "List the meeting pages one San Francisco board, commission, or department "
+            "published on SF.gov for a date range, newest first. Returns each page's "
+            "meeting date, start time, title, cancelled flag, and link (the page carries "
+            "the agenda), the files staff attached with their headings, such as minutes, "
+            "and video links. Give agency as the exact name SF.gov uses, such as Police "
+            "Commission; an inexact name returns the names that match. SF.gov has no "
+            "minutes field, so read a file's heading and title before you call it the "
+            "minutes. A page with no readable date is listed last whatever the dates. For "
+            "the Board of Supervisors and its committees, use find_meetings with client "
+            "sfgov. The server runs one SF.gov lookup at a time, so call the SF.gov tools "
+            "one after another. Same response shape and rules as query_dataset."
+        ),
+    )
+    async def find_sfgov_meetings(
+        agency: Annotated[str, SFGOV_AGENCY_FIELD],
+        start_date: Annotated[str, DATE_FIELD],
+        end_date: Annotated[str, DATE_FIELD],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"agency": agency, "start_date": start_date, "end_date": end_date}
+        return await run_lookup(
+            ctx,
+            action="find_sfgov_meetings",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=SFGOV_HOST,
+            prepare=lambda state_: sfgov(state_).find_meetings(**arguments),
+        )
+
+    @server.tool(
+        name="search_sfgov",
+        description=(
+            "Find pages on SF.gov, San Francisco's city website, by words in the title, or "
+            "files in SF.gov's document library by words in the title or description. A "
+            "page search covers every kind of page: news, meetings, reports, agency pages, "
+            "and events. Returns at most 50 rows in the site's own order, each with its "
+            "public link. It cannot be limited to one agency; for one agency's news or "
+            "meetings use find_sfgov_news or find_sfgov_meetings. The server runs one "
+            "SF.gov lookup at a time, so call the SF.gov tools one after another. Same "
+            "response shape and rules as query_dataset."
+        ),
+    )
+    async def search_sfgov(
+        text: Annotated[
+            str,
+            Field(
+                description="Plain words from the title you are looking for.",
+                max_length=SFGOV_MAX_TEXT,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+        kind: Annotated[
+            Literal["pages", "documents"],
+            Field(
+                description=(
+                    "pages searches page titles; documents searches files in the document "
+                    "library, such as reports and minutes."
+                )
+            ),
+        ] = "pages",
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"text": text, "kind": kind}
+        return await run_lookup(
+            ctx,
+            action="search_sfgov",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=SFGOV_HOST,
+            prepare=lambda state_: sfgov(state_).search(**arguments),
         )
 
     def census(state: AppState) -> CensusData:

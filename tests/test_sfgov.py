@@ -657,7 +657,7 @@ async def test_a_meeting_list_in_an_unexpected_shape_is_a_source_error(body: Any
 
 
 @pytest.mark.asyncio
-async def test_a_meeting_list_that_changes_between_pages_is_a_source_error(
+async def test_a_meeting_list_that_changes_between_pages_is_a_retryable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sfgov, "MEETING_PAGE_SIZE", 3)
@@ -671,10 +671,13 @@ async def test_a_meeting_list_that_changes_between_pages_is_a_source_error(
 
     source, _ = source_answering(by_type(agency=POLICE_AGENCY, meeting=meeting))
 
-    with pytest.raises(SourceError, match="changed while it was read"):
+    with pytest.raises(SourceQueryError, match="changed while it was read") as caught:
         await source.find_meetings(
             agency="Police Commission", start_date="2025-01-01", end_date="2025-12-31"
         ).run()
+
+    assert caught.value.code == "SOURCE_UNAVAILABLE"
+    assert caught.value.public_message.endswith("Try again.")
 
 
 @pytest.mark.asyncio
@@ -776,7 +779,7 @@ async def test_a_search_answer_in_an_unexpected_shape_is_a_source_error(
             "cannot order by 'date' while searching",
         ),
         (httpx.Response(500, text="oops"), "SOURCE_UNAVAILABLE", "HTTP 500"),
-        (httpx.Response(429, json={"message": "slow down"}), "SOURCE_UNAVAILABLE", "HTTP 429"),
+        (httpx.Response(429, json={"message": "slow down"}), "SOURCE_RATE_LIMITED", "HTTP 429"),
         (
             httpx.Response(301, headers={"Location": "https://elsewhere.example/"}),
             "SOURCE_UNAVAILABLE",
@@ -910,7 +913,7 @@ async def test_an_end_date_before_the_start_is_ignored_and_a_broken_one_undates_
 
 
 @pytest.mark.asyncio
-async def test_a_list_that_shifts_between_pages_is_a_source_error(
+async def test_a_list_that_shifts_between_pages_is_a_retryable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # One page leaves the first batch and an older one joins, so the total and the id
@@ -926,10 +929,13 @@ async def test_a_list_that_shifts_between_pages_is_a_source_error(
 
     source, _ = source_answering(by_type(agency=POLICE_AGENCY, meeting=meeting))
 
-    with pytest.raises(SourceError, match="changed while it was read"):
+    with pytest.raises(SourceQueryError, match="changed while it was read") as caught:
         await source.find_meetings(
             agency="Police Commission", start_date="2025-01-01", end_date="2025-12-31"
         ).run()
+
+    assert caught.value.code == "SOURCE_UNAVAILABLE"
+    assert caught.value.public_message.endswith("Try again.")
 
 
 @pytest.mark.asyncio
@@ -1097,6 +1103,17 @@ def test_the_source_builds_a_client_that_names_itself_and_follows_no_redirect() 
     assert client.follow_redirects is False
     assert source._http._headers["User-Agent"].startswith("OpenCivicQuery/")
     assert source.host == "api.sf.gov"
+    # The module's own pace: requests at least one second apart.
+    assert source._min_interval == 1.0
+
+
+@pytest.mark.asyncio
+async def test_closing_the_source_closes_its_own_client() -> None:
+    source = SfGov()
+
+    await source.close()
+
+    assert source._http._client.is_closed
 
 
 def test_search_words_drop_punctuation_and_possessives() -> None:
@@ -1105,3 +1122,118 @@ def test_search_words_drop_punctuation_and_possessives() -> None:
     assert sfgov.validate_agency(" Film SF |  San Francisco Film Commission ") == (
         "Film SF | San Francisco Film Commission"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_429_is_not_retried_and_pauses_every_lookup_for_a_minute() -> None:
+    now = 1000.0
+    answers = [httpx.Response(429, headers={"Retry-After": "5"}, text="slow down")]
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return answers.pop(0) if answers else httpx.Response(200, json=EMPTY)
+
+    source = SfGov(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        min_request_interval=0,
+        clock=lambda: now,
+    )
+
+    with pytest.raises(SourceQueryError) as refused:
+        await source.find_meetings(
+            agency="Police Commission", start_date="2025-01-01", end_date="2025-12-31"
+        ).run()
+    assert refused.value.code == "SOURCE_RATE_LIMITED"
+    assert refused.value.http_status == 429
+    assert "Try again in a minute" in refused.value.public_message
+    assert len(requests) == 1
+
+    now += 59.0
+    # Refused when the lookup is prepared, before it could cost a usage allowance.
+    with pytest.raises(SourceQueryError) as paused:
+        source.search(text="budget")
+    assert paused.value.code == "SOURCE_RATE_LIMITED"
+    assert paused.value.http_status is None
+    assert "was not sent. Try again in about 1 seconds" in paused.value.public_message
+    with pytest.raises(SourceQueryError):
+        source.find_news(start_date="2026-10-01", end_date="2026-10-31")
+    with pytest.raises(SourceQueryError) as invalid:
+        source.search(text="?")
+    assert invalid.value.code == "INVALID_QUERY_ARGUMENT"
+    assert len(requests) == 1
+
+    now += 2.0
+    found = await source.search(text="budget").run()
+    assert found.result.returned_row_count == 0
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_429_on_a_later_request_of_a_lookup_stops_it_and_starts_the_pause() -> None:
+    now = 50.0
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.params["type"] == "sf.Agency":
+            return httpx.Response(200, json=POLICE_AGENCY)
+        return httpx.Response(429, text="slow down")
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return route(request)
+
+    source = SfGov(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        min_request_interval=0,
+        clock=lambda: now,
+    )
+    prepared = source.find_meetings(
+        agency="Police Commission", start_date="2025-01-01", end_date="2025-12-31"
+    )
+    queued_before_the_pause = source.search(text="budget")
+
+    with pytest.raises(SourceQueryError) as refused:
+        await prepared.run()
+    assert refused.value.code == "SOURCE_RATE_LIMITED" and refused.value.http_status == 429
+    assert [request.url.params["type"] for request in requests] == ["sf.Agency", "sf.Meeting"]
+
+    # A lookup prepared before the pause began is refused when it runs, still unsent.
+    with pytest.raises(SourceQueryError) as late:
+        await queued_before_the_pause.run()
+    assert late.value.code == "SOURCE_RATE_LIMITED" and late.value.http_status is None
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_that_waits_too_long_in_the_queue_is_refused_unsent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sfgov, "QUEUE_WAIT_SECONDS", 0.05)
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        started.append(request.url.params["search"])
+        if request.url.params["search"] == "first":
+            await release.wait()
+        return httpx.Response(200, json=EMPTY)
+
+    source = SfGov(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), min_request_interval=0
+    )
+    first = asyncio.create_task(source.search(text="first").run())
+    await asyncio.sleep(0.01)
+
+    with pytest.raises(SourceQueryError) as refused:
+        await source.search(text="second").run()
+
+    assert refused.value.code == "SOURCE_BUSY"
+    assert "Nothing was sent to SF.gov" in refused.value.public_message
+    assert started == ["first"]
+    release.set()
+    await first
+    # The refused lookup left the queue clean: the next one runs at once.
+    await source.search(text="third").run()
+    assert started == ["first", "third"]
