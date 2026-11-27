@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from opencivicquery import __version__
+from opencivicquery import DEFAULT_USER_AGENT
 from opencivicquery.logging_redaction import scrub
 from opencivicquery.models import (
     CatalogEntry,
@@ -198,7 +198,7 @@ class SocrataNetwork:
         self._portals = set(portals) if portals is not None else None
         self._request_headers = {
             "Accept": "application/json",
-            "User-Agent": f"OpenCivicQuery/{__version__}",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
         if self._token:
             self._request_headers["X-App-Token"] = self._token

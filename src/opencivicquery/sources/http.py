@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from opencivicquery import __version__
+from opencivicquery import DEFAULT_USER_AGENT
 from opencivicquery.sources.base import SourceError, SourceQueryError
 
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -38,7 +38,7 @@ class FixedHostClient:
         self._max_response_bytes = max_response_bytes
         self._headers = {
             "Accept": "application/json",
-            "User-Agent": user_agent or f"OpenCivicQuery/{__version__}",
+            "User-Agent": user_agent or DEFAULT_USER_AGENT,
         }
 
     async def send(

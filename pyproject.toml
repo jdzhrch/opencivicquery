@@ -24,6 +24,9 @@ dev = [
   "ruff>=0.12,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/jdzhrch/opencivicquery"
+
 [project.scripts]
 opencivicquery = "opencivicquery.cli:main"
 opencivicquery-server = "opencivicquery.mcp_server:main"

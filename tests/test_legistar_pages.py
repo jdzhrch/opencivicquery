@@ -625,7 +625,7 @@ async def test_a_stale_api_copy_is_answered_from_the_search_and_matter_pages() -
         "GUID": "12FF587B-F263-408F-B47C-1632D615BDCB",
     }
     assert {request.headers["user-agent"] for request in site.requests} == {
-        f"OpenCivicQuery/{__version__}"
+        f"OpenCivicQuery/{__version__} (+https://github.com/jdzhrch/opencivicquery)"
     }
 
     result = found.result

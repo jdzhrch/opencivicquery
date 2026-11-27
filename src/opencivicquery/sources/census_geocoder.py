@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from opencivicquery import __version__
+from opencivicquery import DEFAULT_USER_AGENT
 from opencivicquery.models import Completeness, SourceQueryResult
 from opencivicquery.sources.base import SourceError, SourceQueryError
 
@@ -171,7 +171,7 @@ class CensusGeocoder:
         self._max_response_bytes = max_response_bytes
         self._headers = {
             "Accept": "application/json",
-            "User-Agent": f"OpenCivicQuery/{__version__}",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
 
     async def _fetch(self, params: dict[str, str]) -> tuple[int, bytes]:

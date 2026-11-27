@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import httpx
 import pytest
 
+from opencivicquery import PROJECT_URL, __version__
 from opencivicquery.sources.base import SourceError, SourceQueryError
 from opencivicquery.sources.http import FixedHostClient
 
@@ -45,4 +49,24 @@ async def test_a_body_nested_past_the_parser_limit_is_a_typed_error(status: int)
 
     # A 200 with an unreadable body is a source error; any other status keeps its own code.
     assert isinstance(caught.value, SourceQueryError) == (status != 200)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_default_identity_names_the_project_and_its_public_repository() -> None:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await FixedHostClient(source_name="Example API", client=client).json(
+        "GET", "https://fixed.example/data"
+    )
+
+    expected = f"OpenCivicQuery/{__version__} (+https://github.com/jdzhrch/opencivicquery)"
+    assert [request.headers["User-Agent"] for request in sent] == [expected]
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    assert tomllib.loads(pyproject.read_text())["project"]["urls"]["Repository"] == PROJECT_URL
     await client.aclose()
