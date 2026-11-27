@@ -1,9 +1,29 @@
 ---
 name: ask-open-data
-description: "Answer reporters' questions from government open data through OpenCivicQuery. Use when someone asks for a count, a comparison, a lookup, or a check of a claim that city, county, state, or federal records on a Socrata open data portal could answer, such as 311 complaints, evictions, building permits, restaurant inspections, police incidents, or campaign finance, or asks which public dataset covers a topic, or which county, census tract, or district a U.S. street address lies in, or what a city or county council or committee did at a meeting, how members voted, or where a local ordinance stands, or what a San Francisco agency or commission posted on SF.gov, or where a California state bill stands and how legislators voted on it, or asks about court cases, dockets, or opinions that CourtListener holds. Returns the figure, the counting rule, and evidence a reporter can cite and an editor can check."
+description: "Answers reporters' questions from government records, not news coverage, with the counting rule behind each figure and evidence an editor can check: the query, a link to the live source, and a saved copy of the rows. Use when a reporter asks for a figure, a lookup, or a check of a claim about: council and board meetings, agenda items, members' votes, or local legislation in Legistar cities such as San Francisco and New York City; campaign contributions, spending, lobbyists, or campaign consultants; 311 complaints, permits, evictions, inspections, police incidents, or other city records on open data portals, or which public records cover a topic; what a San Francisco agency or commission posted on SF.gov; California bills, their authors, and legislators' votes; federal court opinions or CourtListener dockets; federal contracts and grants, SEC filings, nonprofits' IRS filings, Census estimates, or which district an address lies in. Also use it to learn where else to look when a record is not online."
 ---
 
 # Ask Open Data
+
+## What OpenCivicQuery offers
+
+**What it gives you.** Figures and facts taken straight from government records, not from news coverage. Each answer states the counting rule behind its figures and comes with evidence an editor can check: the exact query, a link to the live source, and a saved copy of the rows that can be kept for publication. When a record is out of reach, it says so, and says where else to look.
+
+**What it can look up.**
+
+- **Local government decisions:** council and board meetings, agenda items, how each member voted, and legislation, in cities and counties that publish through Legistar, including San Francisco and New York City.
+- **Money in local politics:** campaign contributions and spending, lobbyist activity, and campaign consultants, where a city publishes them as open data. San Francisco's Ethics Commission filings are documented in detail.
+- **City records on open data portals:** 311 complaints, building permits, evictions, restaurant inspections, police incidents and more, from hundreds of cities, counties, states, and federal agencies. It can also find which public records exist on a topic.
+- **San Francisco's city website:** what an agency or commission announced, meeting pages with their documents, and the text of a page.
+- **California bills:** authors, actions, and how legislators voted.
+- **Courts:** federal court opinions, and federal case dockets through CourtListener, which each user signs in to.
+- **Other federal records:** contracts and grants, SEC filings, nonprofits' IRS tax filings, Census estimates for an area, and which county, tract, or district an address lies in.
+
+**When the records are not online.** It names the paid or manual channels that hold them, gives step-by-step guides for public websites it cannot read, and lists San Francisco agencies' records-request and press contacts.
+
+**Where it goes deepest.** San Francisco, New York City, and Cook County, where it documents how to count each source. Elsewhere it still reads the records and says when the counting rules are unknown.
+
+## How to work
 
 You answer questions from government open data through the OpenCivicQuery tools. You hand back a number the agency published, the counting rule behind it, and the evidence for it. You never draft final copy and you never publish anything.
 

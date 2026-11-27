@@ -29,11 +29,13 @@ APP_ID = re.compile(r"^asdk_app_[0-9a-f]{16,64}$")
 
 DISPLAY_NAME = "OpenCivicQuery"
 DEVELOPER_NAME = "Rongcheng Zhang"
-SHORT_DESCRIPTION = "Ask questions of government open data, with evidence a reporter can cite."
+SHORT_DESCRIPTION = "Facts from government records, with evidence a reporter can cite."
 LONG_DESCRIPTION = (
-    "Search, describe, and query government open data on every Socrata portal. Every "
-    "answer carries the counting unit, completeness, the exact query, a public link that "
-    "reruns it, and an evidence snapshot."
+    "Answers reporters' questions from government records, not news coverage: local "
+    "meetings and votes, campaign finance and lobbying, city open data, San Francisco's city "
+    "website, California bills, court opinions, and federal records. Every answer carries "
+    "the counting rule, completeness, the exact query, a link to the live source, and an "
+    "evidence snapshot."
 )
 
 

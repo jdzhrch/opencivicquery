@@ -64,31 +64,63 @@ from opencivicquery.sources.usaspending import (
 )
 from opencivicquery.sources.usaspending import MAX_LIMIT as AWARDS_MAX_LIMIT
 
-SERVER_INSTRUCTIONS = (
-    "OpenCivicQuery answers questions from government open data on every portal the Socrata "
-    "platform hosts: cities, counties, states, and federal agencies. Call list_source_packs "
-    "first. A source pack documents what each row of a dataset means and how to count it, "
-    "and answers from documented datasets are safer. Then search and describe a dataset "
-    "before querying it. Ask the user to clarify any ambiguous place, date range, metric, or "
-    "counting unit. Never present a truncated result as complete. Judge whether the records "
-    "support the user's specific claim. If the row grain, time field, geography, or counting "
-    "unit is unclear, say exactly what remains unknown and do not expand the result into a "
-    "broader claim. Never attach a dataset-wide quality, review, approval, certification, or "
-    "publication label. Publication decisions belong to the newsroom's editorial process. "
-    "Every successful query returns a citable snapshot. To place a U.S. street address in "
-    "census geographies such as its county, tract, and block, call geocode_address. For "
-    "American Community Survey estimates for those geographies, call get_census_data. For "
-    "city and county meetings, agenda items, member votes, and legislation in places that "
-    "publish through Legistar, call find_meetings, get_meeting_items, get_item_votes, and "
+SERVER_INTRODUCTION = (
+    "What OpenCivicQuery gives you: figures and facts taken straight from government records, "
+    "not from news coverage. Each answer states the counting rule behind its figures and comes "
+    "with evidence an editor can check: the exact query, a link to the live source, and a "
+    "saved copy of the rows that can be kept for publication. When a record is out of reach, "
+    "it says so.\n\n"
+    "What it can look up:\n"
+    "- Local government decisions: council and board meetings, agenda items, how each member "
+    "voted, and legislation, in cities and counties that publish through Legistar, including "
+    "San Francisco and New York City.\n"
+    "- Money in local politics: campaign contributions and spending, lobbyist activity, and "
+    "campaign consultants, where a city publishes them as open data. San Francisco's Ethics "
+    "Commission filings are documented in detail.\n"
+    "- City records on open data portals: 311 complaints, building permits, evictions, "
+    "restaurant inspections, police incidents and more, from hundreds of cities, counties, "
+    "states, and federal agencies. It can also find which public records exist on a topic.\n"
+    "- San Francisco's city website: what an agency or commission announced, meeting pages "
+    "with their documents, and the text of a page.\n"
+    "- California bills: authors, actions, and how legislators voted.\n"
+    "- Federal records: court opinions, contracts and grants, SEC filings, nonprofits' IRS tax "
+    "filings, Census estimates for an area, and which county, tract, or district an address "
+    "lies in.\n\n"
+    "Where it goes deepest: San Francisco, New York City, and Cook County, where it documents "
+    "how to count each source. Elsewhere it still reads the records and says when the counting "
+    "rules are unknown."
+)
+"""What the server offers, in the reader's terms, so a client choosing among tools can tell
+what records sit behind this one. Keep it in step with the plugin's description."""
+
+SERVER_GUIDE = (
+    "For records on open data portals, which every portal the Socrata platform hosts can "
+    "answer, call list_source_packs first. A source pack documents what each row of a "
+    "dataset means and how to count it, and answers from documented datasets are safer. "
+    "Then search and describe a dataset before querying it. Ask the user to clarify any "
+    "ambiguous place, date range, metric, or counting unit. Never present a truncated "
+    "result as complete. Judge whether the records support the user's specific claim. If "
+    "the row grain, time field, geography, or counting unit is unclear, say exactly what "
+    "remains unknown and do not expand the result into a broader claim. Never attach a "
+    "dataset-wide quality, review, approval, certification, or publication label. "
+    "Publication decisions belong to the newsroom's editorial process. Every successful "
+    "query returns a citable snapshot. To place a U.S. street address in census geographies "
+    "such as its county, tract, and block, call geocode_address. For American Community "
+    "Survey estimates for those geographies, call get_census_data. For city and county "
+    "meetings, agenda items, member votes, and legislation in places that publish through "
+    "Legistar, call find_meetings, get_meeting_items, get_item_votes, and "
     "search_legislation. For a company's SEC filings, call find_sec_filings. For federal "
-    "contracts, grants, and other awards, call search_federal_awards. For the text of federal "
-    "court opinions, call search_court_opinions. For a tax-exempt organization's IRS Form "
-    "990 filings, call search_nonprofits and then get_nonprofit_filings. For news, meeting "
-    "pages, and documents on San Francisco's city website, SF.gov, call find_sfgov_news, "
-    "find_sfgov_meetings, and search_sfgov; get_sfgov_page returns the text of one news or "
-    "meeting page. For California state bills, their authors, actions, and how each "
-    "legislator voted, call search_california_bills and get_california_bill. These tools "
-    "follow the same evidence rules.\n\n"
+    "contracts, grants, and other awards, call search_federal_awards. For the text of "
+    "federal court opinions, call search_court_opinions. For a tax-exempt organization's "
+    "IRS Form 990 filings, call search_nonprofits and then get_nonprofit_filings. For news, "
+    "meeting pages, and documents on San Francisco's city website, SF.gov, call "
+    "find_sfgov_news, find_sfgov_meetings, and search_sfgov; get_sfgov_page returns the "
+    "text of one news or meeting page. For California state bills, their authors, actions, "
+    "and how each legislator voted, call search_california_bills and get_california_bill. "
+    "These tools follow the same evidence rules."
+)
+
+SERVER_RULES = (
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -105,16 +137,17 @@ SERVER_INSTRUCTIONS = (
     "agency that publishes the dataset."
 )
 
+SERVER_INSTRUCTIONS = "\n\n".join((SERVER_INTRODUCTION, SERVER_GUIDE, SERVER_RULES))
+
 
 def _instructions(tools: tuple[str, ...]) -> str:
     """The server instructions, introduced by the tools offered when only some are."""
     if not tools:
         return SERVER_INSTRUCTIONS
-    rules = SERVER_INSTRUCTIONS.split("\n\n", 1)[1]
     return (
         f"This server offers these OpenCivicQuery tools: {', '.join(tools)}. They follow "
         "OpenCivicQuery's evidence rules: every successful answer returns a citable snapshot."
-        f"\n\n{rules}"
+        f"\n\n{SERVER_RULES}"
     )
 
 
