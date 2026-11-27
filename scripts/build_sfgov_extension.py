@@ -32,6 +32,7 @@ EXPECTED_TOOLS = {
     "find_sfgov_news",
     "find_sfgov_meetings",
     "search_sfgov",
+    "get_sfgov_page",
     "pin_snapshot",
     "get_snapshot",
 }

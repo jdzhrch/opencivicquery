@@ -1649,6 +1649,7 @@ async def test_an_unanswering_sfgov_answers_from_the_daily_copy_over_mcp(
                 abstract="Raises Required Ellis Act Payments by 25%",
                 page_url="https://www.sf.gov/news-mayor-lurie-signs-legislation",
                 text="SAN FRANCISCO - Mayor Daniel Lurie today signed legislation.",
+                text_read_at=taken,
             )
         ],
         meetings=[],
@@ -1682,10 +1683,16 @@ async def test_an_unanswering_sfgov_answers_from_the_daily_copy_over_mcp(
             stored = await client.call_tool(
                 "get_snapshot", {"snapshot_uri": news.structured_content["snapshot"]["uri"]}
             )
+            page = await client.call_tool("get_sfgov_page", question | {"page_id": 110692})
     finally:
         await http_client.aclose()
         await sfgov_client.aclose()
 
+    assert page.is_error is False
+    page_payload = page.structured_content
+    assert page_payload["rows"][0]["text"].startswith("SAN FRANCISCO")
+    assert page_payload["warnings"][0].startswith("FROM THE DAILY COPY.")
+    assert page_payload["snapshot"]["uri"].startswith("file://")
     assert news.is_error is False
     payload = news.structured_content
     QueryResponse.model_validate(payload)
@@ -1711,3 +1718,4 @@ async def test_an_unanswering_sfgov_answers_from_the_daily_copy_over_mcp(
     assert events[0]["status"] == "success"
     assert "SFGOV_DAILY_COPY" in events[0]["presentation_escalations"]
     assert events[1]["status"] == "error" and events[1]["error_type"] == "NOT_FOUND"
+    assert events[2]["action"] == "get_sfgov_page" and events[2]["arguments"] == {"page_id": 110692}

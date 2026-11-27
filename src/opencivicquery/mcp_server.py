@@ -46,6 +46,7 @@ from opencivicquery.sources.sec_edgar import MAX_COMPANY_LENGTH, MAX_FORM_TYPES,
 from opencivicquery.sources.sec_edgar import MAX_LIMIT as SEC_MAX_LIMIT
 from opencivicquery.sources.sec_edgar import SUBMISSIONS_HOST as SEC_HOST
 from opencivicquery.sources.sfgov import MAX_AGENCY_LENGTH as SFGOV_MAX_AGENCY
+from opencivicquery.sources.sfgov import MAX_PAGE_ID as SFGOV_MAX_PAGE_ID
 from opencivicquery.sources.sfgov import MAX_TEXT_LENGTH as SFGOV_MAX_TEXT
 from opencivicquery.sources.sfgov import SFGOV_HOST, SfGov
 from opencivicquery.sources.sfgov_copy import CopyReader, copy_store
@@ -81,7 +82,8 @@ SERVER_INSTRUCTIONS = (
     "court opinions, call search_court_opinions. For a tax-exempt organization's IRS Form "
     "990 filings, call search_nonprofits and then get_nonprofit_filings. For news, meeting "
     "pages, and documents on San Francisco's city website, SF.gov, call find_sfgov_news, "
-    "find_sfgov_meetings, and search_sfgov. These tools follow the same evidence rules.\n\n"
+    "find_sfgov_meetings, and search_sfgov; get_sfgov_page returns the text of one news or "
+    "meeting page. These tools follow the same evidence rules.\n\n"
     "The people reading your answer are reporters who will not open the tool output. A "
     "caveat reaches them only if you write it into your reply. Every successful query "
     "response carries a presentation_rules list; follow every rule in it. At minimum, name "
@@ -1243,6 +1245,40 @@ def create_server(settings: RuntimeSettings) -> MCPServer[AppState]:
             arguments=arguments,
             host=SFGOV_HOST,
             prepare=lambda state_: sfgov(state_).search(**arguments),
+        )
+
+    @tool(
+        name="get_sfgov_page",
+        description=(
+            "Return the text of one SF.gov news or meeting page: for news, the body; for a "
+            "meeting page, the overview and each agenda item's title and text. Give the "
+            "page_id of a row from find_sfgov_news, find_sfgov_meetings, or search_sfgov. The "
+            "server runs one SF.gov lookup at a time, so call the SF.gov tools one after "
+            "another. When SF.gov cannot be reached, the answer comes from a daily copy and "
+            "says so. The response carries warnings, presentation_rules to obey, and an "
+            "evidence snapshot."
+        ),
+    )
+    async def get_sfgov_page(
+        page_id: Annotated[
+            int,
+            Field(
+                description="The page_id of a news or meeting page row.",
+                ge=1,
+                le=SFGOV_MAX_PAGE_ID,
+            ),
+        ],
+        reporter_question: Annotated[str, REPORTER_QUESTION_FIELD],
+        ctx: Context[AppState],
+    ) -> Annotated[CallToolResult, dict[str, Any]]:
+        arguments = {"page_id": page_id}
+        return await run_lookup(
+            ctx,
+            action="get_sfgov_page",
+            reporter_question=reporter_question,
+            arguments=arguments,
+            host=SFGOV_HOST,
+            prepare=lambda state_: sfgov(state_).get_page(**arguments),
         )
 
     def census(state: AppState) -> CensusData:

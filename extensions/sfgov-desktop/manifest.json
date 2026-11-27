@@ -3,8 +3,8 @@
   "name": "opencivicquery-sfgov",
   "display_name": "OpenCivicQuery: SF.gov",
   "version": "0.1.0",
-  "description": "Live answers from San Francisco's city website, SF.gov: agency news, meeting pages with the files attached to them, such as minutes, and page and document titles, each with evidence a reporter can cite.",
-  "long_description": "OpenCivicQuery's three SF.gov tools, run on your own computer. They read the content interface behind www.sf.gov directly, so answers are live and cover every agency on the site.\n\n- **find_sfgov_news** lists an agency's news pages in a date range.\n- **find_sfgov_meetings** lists a board's or commission's meeting pages in a date range, with the files attached to each page, such as minutes, and video links.\n- **search_sfgov** finds pages by words in the title, or files in SF.gov's document library.\n\nEvery answer carries warnings, presentation rules, and an evidence snapshot saved on this computer under ~/.opencivicquery/snapshots; pin_snapshot and get_snapshot keep and read them.",
+  "description": "Live answers from San Francisco's city website, SF.gov: agency news, meeting pages with the files attached to them, such as minutes, page and document titles, and the text of a news or meeting page, each with evidence a reporter can cite.",
+  "long_description": "OpenCivicQuery's SF.gov tools, run on your own computer. They read the content interface behind www.sf.gov directly, so answers are live and cover every agency on the site.\n\n- **find_sfgov_news** lists an agency's news pages in a date range.\n- **find_sfgov_meetings** lists a board's or commission's meeting pages in a date range, with the files attached to each page, such as minutes, and video links.\n- **search_sfgov** finds pages by words in the title, or files in SF.gov's document library.\n- **get_sfgov_page** returns the text of one news or meeting page.\n\nEvery answer carries warnings, presentation rules, and an evidence snapshot saved on this computer under ~/.opencivicquery/snapshots; pin_snapshot and get_snapshot keep and read them.",
   "author": {
     "name": "Rongcheng Zhang",
     "url": "https://github.com/jdzhrch"
@@ -42,6 +42,10 @@
     {
       "name": "search_sfgov",
       "description": "Find SF.gov pages by words in the title, or files in its document library."
+    },
+    {
+      "name": "get_sfgov_page",
+      "description": "Return the text of one SF.gov news or meeting page."
     },
     {
       "name": "pin_snapshot",

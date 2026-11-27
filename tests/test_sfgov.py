@@ -1237,3 +1237,303 @@ async def test_a_lookup_that_waits_too_long_in_the_queue_is_refused_unsent(
     # The refused lookup left the queue clean: the next one runs at once.
     await source.search(text="third").run()
     assert started == ["first", "third"]
+
+
+NEWS_PAGE = fixture("news_page_110692")
+AGENDA_PAGES = {
+    item["id"]: item | {"primary_agency": {"id": 3005, "title": "Police Commission"}}
+    for item in fixture("meetings_police_commission_agenda")["items"]
+}
+AGENDA_PAGE = AGENDA_PAGES[110632]
+OVERVIEW_PAGE = AGENDA_PAGES[108949]
+
+
+def _one_page(body: dict[str, Any] | httpx.Response) -> Route:
+    return lambda _: body if isinstance(body, httpx.Response) else httpx.Response(200, json=body)
+
+
+def _without(page: dict[str, Any], key: str) -> dict[str, Any]:
+    return {name: value for name, value in page.items() if name != key}
+
+
+@pytest.mark.asyncio
+async def test_a_news_page_reads_as_its_text() -> None:
+    source, requests = source_answering(_one_page(NEWS_PAGE))
+
+    found = await source.get_page(page_id=110692).run()
+
+    (sent,) = requests
+    assert sent.url.path == "/api/v2/pages/110692/" and not sent.url.params
+    (row,) = found.result.rows
+    assert list(row) == list(sfgov.PAGE_TEXT_FIELDS)
+    assert row["page_type"] == "sf.News" and row["date"] == "2026-11-24"
+    assert row["cancelled"] is None
+    assert row["agency"] == "Office of the Mayor"
+    assert row["text"].startswith("SAN FRANCISCO")
+    assert "<p" not in row["text"]
+    assert row["page_url"].startswith("https://www.sf.gov/")
+    assert found.result.completeness == Completeness.COMPLETE
+    assert found.result.query_url == f"https://{SFGOV_HOST}/api/v2/pages/110692/"
+    assert found.warnings == [sfgov.PAGE_TEXT_WARNING, UNDOCUMENTED_WARNING]
+    assert found.rules == [sfgov.PAGE_TEXT_RULE, LINK_RULE]
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_page_reads_as_its_agenda() -> None:
+    source, _ = source_answering(_one_page(AGENDA_PAGE))
+
+    found = await source.get_page(page_id=AGENDA_PAGE["id"]).run()
+
+    (row,) = found.result.rows
+    assert row["page_type"] == "sf.Meeting" and row["date"] == "2026-12-02"
+    assert row["cancelled"] is False
+    assert row["agency"] == "Police Commission"
+    assert row["text"].startswith("General Public Comment")
+    assert "Adoption of Minutes" in row["text"]
+    assert found.result.completeness == Completeness.COMPLETE
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_page_reads_its_overview_first() -> None:
+    source, _ = source_answering(_one_page(OVERVIEW_PAGE))
+
+    found = await source.get_page(page_id=108949).run()
+
+    text = found.result.rows[0]["text"]
+    assert text.startswith("The Police Commission will not hold a Regular Meeting")
+    assert len(text.split("\n\n")) == 2
+
+
+@pytest.mark.asyncio
+async def test_agenda_blocks_it_cannot_read_make_the_answer_partial() -> None:
+    page = copy.deepcopy(AGENDA_PAGE)
+    page["agenda"].insert(0, {"type": "agenda_section", "value": {"heading": "Closed session"}})
+    page["agenda"][1]["value"]["title_and_text"]["text"] = [{"type": "paragraph"}]
+    page["overview"] = [{"type": "paragraph"}]
+
+    found = await source_answering(_one_page(page))[0].get_page(page_id=110632).run()
+
+    assert found.result.completeness == Completeness.TRUNCATED
+    assert found.warnings[0].startswith("PARTIAL: 3 agenda blocks on this page have a form")
+    assert "Adoption of Minutes" in found.result.rows[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_page_whose_only_blocks_are_unread_is_not_called_empty() -> None:
+    page = copy.deepcopy(AGENDA_PAGE) | {"overview": ""}
+    page["agenda"] = [{"type": "agenda_section", "value": {}}]
+
+    found = await source_answering(_one_page(page))[0].get_page(page_id=110632).run()
+
+    assert found.result.rows[0]["text"] is None
+    assert found.result.completeness == Completeness.TRUNCATED
+    assert not any("shows no text" in warning for warning in found.warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_page_with_no_text_says_so_and_is_complete() -> None:
+    page = copy.deepcopy(NEWS_PAGE) | {"body": None}
+
+    found = await source_answering(_one_page(page))[0].get_page(page_id=110692).run()
+
+    assert found.result.rows[0]["text"] is None
+    assert found.result.completeness == Completeness.COMPLETE
+    assert found.warnings[0] == "SF.gov shows no body text on this page. Open page_url."
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_page_names_its_status_and_every_day() -> None:
+    page = copy.deepcopy(AGENDA_PAGE) | {"cancelled": True}
+    first = page["date_time"][0]
+    page["date_time"] = [
+        first | {"value": first["value"] | {"start_date": "2026-12-09"}},
+        first,
+        first | {"value": first["value"] | {"start_time": "18:00:00"}},
+    ]
+    undated = copy.deepcopy(AGENDA_PAGE) | {"date_time": [{"type": "other", "value": {}}]}
+
+    found = await source_answering(_one_page(page))[0].get_page(page_id=110632).run()
+    blank = await source_answering(_one_page(undated))[0].get_page(page_id=110632).run()
+
+    assert found.result.rows[0]["date"] == "2026-12-02"
+    assert found.result.rows[0]["cancelled"] is True
+    assert "SF.gov marks this meeting cancelled." in found.warnings
+    assert (
+        "This meeting page lists more than one day: 2026-12-02; 2026-12-09. date holds the first."
+        in found.warnings
+    )
+    assert blank.result.rows[0]["date"] is None
+    assert any(warning.startswith("SF.gov gives no date") for warning in blank.warnings)
+
+
+@pytest.mark.asyncio
+async def test_long_text_is_cut_and_marked_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sfgov, "MAX_PAGE_TEXT", 40)
+    source, _ = source_answering(_one_page(NEWS_PAGE))
+
+    found = await source.get_page(page_id=110692).run()
+
+    # "SAN FRANCISCO – Mayor Daniel Lurie ...": the dash is written as a six-character escape.
+    assert found.result.rows[0]["text"] == "SAN FRANCISCO – Mayor Daniel Lurie "
+    assert found.result.completeness == Completeness.TRUNCATED
+    assert found.warnings[0].startswith("PARTIAL: the page's text is longer than one answer")
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("a" * 30, "a" * 30),
+        ("a" * 31, "a" * 30),
+        ("中" * 10, "中" * 5),
+        ("😀" * 3, "😀" * 2),
+        ('"\n' * 10, '"\n' * 7 + '"'),
+    ],
+)
+def test_the_text_limit_counts_what_an_answer_writes(
+    monkeypatch: pytest.MonkeyPatch, text: str, kept: str
+) -> None:
+    monkeypatch.setattr(sfgov, "MAX_PAGE_TEXT", 30)
+
+    assert sfgov._capped(text) == (kept, text != kept)
+
+
+@pytest.mark.asyncio
+async def test_a_translated_page_says_so() -> None:
+    page = copy.deepcopy(NEWS_PAGE)
+    page["meta"]["locale"] = "zh-hant"
+    source, _ = source_answering(_one_page(page))
+
+    found = await source.get_page(page_id=110692).run()
+
+    assert "This page is SF.gov's translation with language tag zh-hant." in found.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "code"),
+    [
+        (httpx.Response(404, json={"message": "No Page matches the given query."}), "NOT_FOUND"),
+        (
+            httpx.Response(
+                200, json=NEWS_PAGE | {"meta": NEWS_PAGE["meta"] | {"type": "sf.Report"}}
+            ),
+            "QUERY_REJECTED",
+        ),
+    ],
+)
+async def test_a_missing_or_other_kind_of_page_is_refused(
+    answer: httpx.Response, code: str
+) -> None:
+    source, _ = source_answering(_one_page(answer))
+
+    with pytest.raises(SourceQueryError) as caught:
+        await source.get_page(page_id=110692).run()
+
+    assert caught.value.code == code and caught.value.argument == "page_id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx.Response(404, text="<html><body>Not Found</body></html>"),
+        httpx.Response(404, json={"message": "Not found"}),
+    ],
+)
+async def test_another_404_is_not_called_a_missing_page(answer: httpx.Response) -> None:
+    source, _ = source_answering(_one_page(answer))
+
+    with pytest.raises(SourceQueryError) as caught:
+        await source.get_page(page_id=110692).run()
+
+    assert caught.value.code == "SOURCE_UNAVAILABLE" and caught.value.http_status == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        NEWS_PAGE | {"id": 1},
+        NEWS_PAGE | {"title": ""},
+        NEWS_PAGE | {"date": "soon"},
+        NEWS_PAGE | {"body": ["not", "text"]},
+        _without(NEWS_PAGE, "body"),
+        NEWS_PAGE | {"meta": NEWS_PAGE["meta"] | {"html_url": "https://evil.example/x/"}},
+        NEWS_PAGE | {"meta": NEWS_PAGE["meta"] | {"locale": {"code": "en"}}},
+        NEWS_PAGE | {"meta": NEWS_PAGE["meta"] | {"locale": ""}},
+        NEWS_PAGE | {"meta": NEWS_PAGE["meta"] | {"locale": "en" * 40}},
+        NEWS_PAGE | {"meta": _without(NEWS_PAGE["meta"], "locale")},
+        _without(AGENDA_PAGE, "agenda"),
+        _without(AGENDA_PAGE, "overview"),
+        AGENDA_PAGE | {"agenda": {"type": "agenda_item"}},
+        AGENDA_PAGE | {"cancelled": "no"},
+    ],
+)
+async def test_a_malformed_page_is_a_source_error(body: dict[str, Any]) -> None:
+    source, _ = source_answering(_one_page(body))
+
+    with pytest.raises(SourceError) as caught:
+        await source.get_page(
+            page_id=110632 if body["meta"]["type"] == "sf.Meeting" else 110692
+        ).run()
+
+    assert not isinstance(caught.value, SourceQueryError)
+
+
+@pytest.mark.parametrize("page_id", [0, -1, True, "110692", 10**9 + 1, 1.5, None])
+def test_an_invalid_page_id_is_refused_before_any_request(page_id: Any) -> None:
+    source, requests = source_answering(by_type())
+
+    with pytest.raises(SourceQueryError) as caught:
+        source.get_page(page_id=page_id)
+
+    assert caught.value.code == "INVALID_QUERY_ARGUMENT" and caught.value.argument == "page_id"
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("html", "text"),
+    [
+        ("<table><tr><td>Ayes</td><td>5</td></tr></table>", "Ayes\n5"),
+        ("<dl><dt>Item</dt><dd>Text</dd></dl><blockquote>Quote</blockquote>after", None),
+        ("<section>One</section><hr>Two<article>Three</article>", "One\nTwo\nThree"),
+        ("<p>Shown</p><script>var x = '<b>no</b>';</script><style>p{}</style>", "Shown"),
+        ("<p>Shown</p><script>never closed <p>hidden</p>", "Shown"),
+        ("<p>a\x00b\x07c\u202ed\u200be</p>", "abcde"),
+    ],
+)
+def test_html_text_keeps_blocks_apart_and_drops_code_and_controls(
+    html: str, text: str | None
+) -> None:
+    expected = text if text is not None else "Item\nText\nQuote\nafter"
+
+    assert sfgov.html_to_text(html) == expected
+
+
+@pytest.mark.asyncio
+async def test_agenda_titles_lose_control_characters_too() -> None:
+    page = copy.deepcopy(AGENDA_PAGE)
+    page["agenda"][0]["value"]["title_and_text"]["title"] = "Item 1 \u202eevil\x1b[2J"
+
+    found = await source_answering(_one_page(page))[0].get_page(page_id=110632).run()
+
+    assert found.result.rows[0]["text"].startswith("Item 1 evil[2J\n")
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<p>Shown</p><iframe><a href="https://evil.example">x</a></iframe>',
+        "<p>Shown</p><noembed><img src=x onerror=alert(1)></noembed>",
+        "<p>Shown</p><noframes><a href='https://evil.example'>x</a></noframes>",
+        "<title>Tab title</title><p>Shown</p>",
+    ],
+)
+def test_content_a_browser_does_not_show_stays_out(html: str) -> None:
+    assert sfgov.html_to_text(html) == "Shown"
+
+
+def test_joiners_that_shape_words_are_kept() -> None:
+    assert sfgov.html_to_text("<p>\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645</p>") == (
+        "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+    )

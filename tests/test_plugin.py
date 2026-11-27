@@ -132,6 +132,7 @@ def test_skill_mentions_only_tools_the_server_offers() -> None:
         "find_sfgov_news",
         "find_sfgov_meetings",
         "search_sfgov",
+        "get_sfgov_page",
         "get_census_data",
         "pin_snapshot",
         "get_snapshot",

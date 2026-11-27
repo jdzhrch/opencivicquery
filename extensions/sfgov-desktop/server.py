@@ -13,7 +13,7 @@ os.environ.setdefault("OPENCIVICQUERY_CONFIG_PATH", str(HERE / "deployment.yaml"
 os.environ["OPENCIVICQUERY_TRANSPORT"] = "stdio"
 # The snapshot tools come along because every answer's rules point to them.
 os.environ["OPENCIVICQUERY_TOOLS"] = (
-    "find_sfgov_news,find_sfgov_meetings,search_sfgov,pin_snapshot,get_snapshot"
+    "find_sfgov_news,find_sfgov_meetings,search_sfgov,get_sfgov_page,pin_snapshot,get_snapshot"
 )
 
 from opencivicquery.mcp_server import main  # noqa: E402

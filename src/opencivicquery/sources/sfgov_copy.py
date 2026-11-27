@@ -7,7 +7,7 @@ to the server's snapshot storage under `sfgov-copy/`. It reads with the same mod
 identity, and the same pace as the live tools, and after the first run it asks only for news
 pages that are new or whose listing changed.
 
-The server's three SF.gov tools answer from the copy when the site cannot be reached. Every
+The server's SF.gov tools answer from the copy when the site cannot be reached. Every
 such answer names the copy's date and the agencies it covers, says what it leaves out, and is
 never marked complete.
 """
@@ -24,7 +24,6 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -52,6 +51,10 @@ from opencivicquery.sources.sfgov import (
     NO_MEETINGS_WARNING,
     PAGE_SEARCH_FIELDS,
     PAGE_SEARCH_GRAIN,
+    PAGE_TEXT_FIELDS,
+    PAGE_TEXT_GRAIN,
+    PAGE_TEXT_RULE,
+    PAGE_TEXT_WARNING,
     PAGES_URL,
     PUBLIC_SITE,
     SEARCH_LIMIT,
@@ -59,6 +62,9 @@ from opencivicquery.sources.sfgov import (
     SOURCE_NAME,
     UNDOCUMENTED_WARNING,
     SfGov,
+    _agenda_text,
+    _capped,
+    _cut_warning,
     _document_link,
     _external_link,
     _filter_meetings,
@@ -75,6 +81,11 @@ from opencivicquery.sources.sfgov import (
     _search_words,
     _Span,
     _text,
+    _unread_warning,
+    clean_text,
+    html_to_text,
+    meeting_page_notes,
+    no_text_warning,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,7 +199,12 @@ class CopyNews(_Strict):
     abstract: str | None
     page_url: str
     text: str | None
-    """The page's text, or None when it could not be read. No answer returns it yet."""
+    """The page's text, "" when the page has none, or None when it could not be read.
+    get_sfgov_page returns it."""
+    text_read_at: datetime | None
+    """When the text was read, or None when it could not be. A daily run reads it again only
+    when the page's date, title, type label, or summary changed, so it can be older than the
+    agency's copied_at."""
 
     _page = field_validator("page_url")(_public_page)
 
@@ -225,6 +241,8 @@ class CopyMeeting(_Strict):
     video_links: list[CopyVideo]
     unread: int
     text: str
+    agenda_unread: int
+    """Agenda blocks of a form the copy does not read, so their text is missing."""
 
     _page = field_validator("page_url")(_public_page)
 
@@ -242,7 +260,9 @@ class CopyDocument(_Strict):
 
 
 class SfGovCopy(_Strict):
-    format: Literal[1] = 1
+    format: Literal[2] = 2
+    """2 since news text carries its read date and meeting pages their unread agenda blocks.
+    A copy of another format is refused, and the next daily run reads everything again."""
     copied_at: datetime
     agencies: list[CopyAgency] = Field(min_length=1)
     news: list[CopyNews]
@@ -360,39 +380,6 @@ def copy_store(*, backend: str, path: Path | None, bucket: str | None) -> CopySt
     return LocalCopyStore(path)
 
 
-class _TextParser(HTMLParser):
-    _BLOCKS = frozenset(
-        {"p", "div", "li", "ul", "ol", "tr", "table", "h1", "h2", "h3", "h4", "h5", "h6"}
-    )
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: Any) -> None:
-        if tag == "br" or tag in self._BLOCKS:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self._BLOCKS:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-
-def html_to_text(html: Any) -> str | None:
-    """The readable text of an HTML fragment, one line per block, or None for no text."""
-    if not isinstance(html, str) or not html.strip():
-        return None
-    parser = _TextParser()
-    parser.feed(html)
-    parser.close()
-    lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
-    text = "\n".join(line for line in lines if line)
-    return text or None
-
-
 class CopyReader:
     """Read the copy from storage and keep it in memory for a few minutes."""
 
@@ -442,6 +429,10 @@ class CopyReader:
     async def search(self, *, words: str, kind: str) -> Lookup | None:
         copy = await self.load()
         return None if copy is None else search_from_copy(copy, words=words, kind=kind)
+
+    async def page(self, *, page_id: int) -> Lookup | None:
+        copy = await self.load()
+        return None if copy is None else page_from_copy(copy, page_id=page_id)
 
 
 # Answers from the copy
@@ -538,12 +529,13 @@ def _lookup(
     result: SourceQueryResult,
     grain: str,
     warnings: list[str],
+    rules: Sequence[str] = (),
 ) -> Lookup:
     return Lookup(
         result=result,
         row_grain=grain,
         warnings=[_copy_warning(copy, scope), *warnings],
-        rules=_copy_rules(_as_of(scope)),
+        rules=[*_copy_rules(_as_of(scope)), *rules],
         escalations=["SFGOV_DAILY_COPY"],
     )
 
@@ -750,6 +742,97 @@ def search_from_copy(copy: SfGovCopy, *, words: str, kind: str) -> Lookup:
     return _lookup(copy, copy.agencies, result, grain, warnings)
 
 
+def page_from_copy(copy: SfGovCopy, *, page_id: int) -> Lookup:
+    agencies = {agency.page_id: agency for agency in copy.agencies}
+    found: list[CopyNews | CopyMeeting] = [
+        item for item in (*copy.news, *copy.meetings) if item.page_id == page_id
+    ]
+    if not found:
+        covered = "; ".join(agency.title for agency in copy.agencies)
+        raise SourceQueryError(
+            f"Page {page_id} not in the SF.gov daily copy",
+            code="NOT_FOUND",
+            argument="page_id",
+            public_message=(
+                "This server could not get a live answer from SF.gov, so this lookup used the "
+                f"daily copy, which holds only the English news and meeting pages of: "
+                f"{covered}. Page "
+                f"{page_id} is not among them. For any page, use the OpenCivicQuery SF.gov "
+                f"extension for Claude Desktop: {EXTENSION_URL}"
+            ),
+        )
+    if any(item.agency_id not in agencies for item in found):
+        raise SourceError("The SF.gov daily copy names an agency it does not hold")
+    # A page that moved to another agency while the old agency's read failed sits in the
+    # copy twice; the agency read last holds the current one.
+    page = max(found, key=lambda item: agencies[item.agency_id].copied_at)
+    agency = agencies[page.agency_id]
+    warnings = []
+    # The copy is checked again here: a changed copy must not carry control characters out.
+    text, cut = _capped(clean_text(page.text))
+    read_at = agency.copied_at
+    if isinstance(page, CopyNews):
+        day: date | None = page.date
+        page_type, cancelled = "sf.News", None
+        unread = page.text is None or page.text_read_at is None
+        if unread:
+            warnings.append(
+                "PARTIAL: the copy could not read this page's text. Open page_url, or use "
+                "the SF.gov extension for Claude Desktop."
+            )
+        else:
+            assert page.text_read_at is not None
+            read_at = page.text_read_at
+            if read_at.date() != agency.copied_at.date():
+                warnings.append(
+                    f"The copy read this page's text on {_day(read_at)}. It reads a news "
+                    "page's text again only when the page's date, title, type label, or "
+                    "summary changes, so a later edit to the text alone is not in the copy."
+                )
+            if text is None:
+                warnings.append(no_text_warning(page_type, copied=True))
+    else:
+        day = min((span.start for span in page.spans), default=None)
+        page_type, cancelled = "sf.Meeting", page.cancelled
+        unread = bool(page.agenda_unread)
+        if unread:
+            warnings.append(_unread_warning(page.agenda_unread))
+        elif text is None:
+            warnings.append(no_text_warning(page_type, copied=True))
+        warnings += meeting_page_notes(page.spans, page.cancelled)
+    partial = cut or unread
+    if cut:
+        warnings.insert(0, _cut_warning())
+    row = {
+        "page_id": page_id,
+        "page_type": page_type,
+        "title": page.title,
+        "date": day.isoformat() if day is not None else None,
+        "cancelled": cancelled,
+        "agency": agency.title,
+        "page_url": page.page_url,
+        "text": text,
+    }
+    result = SourceQueryResult(
+        dataset_id="sfgov-copy/page",
+        dataset_name=f"SF.gov page {page_id} from the daily copy: {page.title}",
+        domain=SFGOV_HOST,
+        source_url=page.page_url,
+        query=(
+            f"daily copy of SF.gov taken {agency.copied_at.isoformat()}; page {page_id}, text "
+            f"read {read_at.isoformat()}"
+        ),
+        query_url=None,
+        rows=[row],
+        returned_row_count=1,
+        completeness=Completeness.TRUNCATED if partial else Completeness.LIMITED,
+        source_updated_at=agency.copied_at.isoformat(),
+        schema_sha256=_schema_hash("page-text", PAGE_TEXT_FIELDS),
+    )
+    warnings += [PAGE_TEXT_WARNING, UNDOCUMENTED_WARNING]
+    return _lookup(copy, [agency], result, PAGE_TEXT_GRAIN, warnings, [PAGE_TEXT_RULE])
+
+
 def _page_row(title: str, page_type: str, page: CopyNews | CopyMeeting) -> dict[str, Any]:
     return {
         "title": title,
@@ -827,29 +910,9 @@ def _documents_of(item: dict[str, Any], page_id: int) -> list[CopyDocument]:
     return documents
 
 
-def _agenda_text(item: dict[str, Any]) -> tuple[str, int]:
-    """The overview and agenda item titles and text of a meeting page, and unread blocks."""
-    agenda = item.get("agenda")
-    if agenda is None:
-        agenda = []
-    if not isinstance(agenda, list):
-        raise SourceError(f"The {SOURCE_NAME} returned a meeting page with a malformed agenda")
-    parts = [html_to_text(item.get("overview"))]
-    unread = 0
-    for block in agenda:
-        value = block.get("value") if isinstance(block, dict) else None
-        heading = value.get("title_and_text") if isinstance(value, dict) else None
-        if not isinstance(heading, dict) or block.get("type") != "agenda_item":
-            unread += 1
-            continue
-        title = _text(heading.get("title"))
-        body = html_to_text(heading.get("text"))
-        parts.append("\n".join(part for part in (title, body) if part))
-    return "\n\n".join(part for part in parts if part), unread
-
-
 async def _news_text(source: SfGov, page_id: int) -> str | None:
-    """The text of one news page, read from its own page in the interface."""
+    """The text of one news page, read from its own page in the interface: "" when it has
+    none, None when the site has no such page."""
     try:
         page = await source._get(f"{PAGES_URL}{page_id}/", {})
     except SourceQueryError as exc:
@@ -861,10 +924,12 @@ async def _news_text(source: SfGov, page_id: int) -> str | None:
         not isinstance(meta, dict)
         or _integer(page.get("id")) != page_id
         or meta.get("type") != "sf.News"
-        or not isinstance(page.get("body"), str | None)
+        or "body" not in page
+        or not isinstance(page["body"], str | None)
     ):
         raise SourceError(f"The {SOURCE_NAME} returned a malformed news page")
-    return html_to_text(page.get("body"))
+    # "" records a page read that holds no text, apart from None, a page not read.
+    return html_to_text(page.get("body")) or ""
 
 
 async def _read_agency(
@@ -902,6 +967,7 @@ async def _read_agency(
         if (
             old is not None
             and old.text is not None
+            and old.text_read_at is not None
             and listing
             == (
                 old.date,
@@ -910,11 +976,12 @@ async def _read_agency(
                 old.abstract,
             )
         ):
-            text = old.text
+            text, read_at = old.text, old.text_read_at
         else:
             outcome.text_requests += 1
             try:
                 text = await _news_text(source, row["page_id"])
+                read_at = now() if text is not None else None
                 failures_in_a_row = 0
             except SourceError as exc:
                 # A slow-down answer stops the run; one unreadable page does not drop the
@@ -925,7 +992,7 @@ async def _read_agency(
                 outcome.text_failures += 1
                 if failures_in_a_row >= MAX_TEXT_FAILURES_IN_A_ROW:
                     raise
-                text = None
+                text, read_at = None, None
         part_news.append(
             CopyNews(
                 page_id=row["page_id"],
@@ -936,6 +1003,7 @@ async def _read_agency(
                 abstract=row["abstract"],
                 page_url=row["page_url"],
                 text=text,
+                text_read_at=read_at,
             )
         )
 
@@ -968,6 +1036,7 @@ async def _read_agency(
                 video_links=parsed.row["video_links"],
                 unread=parsed.unread,
                 text=text,
+                agenda_unread=agenda_unread,
             )
         )
         if agenda_unread:

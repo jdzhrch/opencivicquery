@@ -38,6 +38,7 @@ EXPECTED_TOOLS = {
     "find_sfgov_news",
     "find_sfgov_meetings",
     "search_sfgov",
+    "get_sfgov_page",
     "get_census_data",
     "pin_snapshot",
     "get_snapshot",
@@ -56,6 +57,7 @@ LOOKUP_TOOLS = (
     "find_sfgov_news",
     "find_sfgov_meetings",
     "search_sfgov",
+    "get_sfgov_page",
     "get_census_data",
 )
 

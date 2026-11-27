@@ -807,3 +807,232 @@ def test_the_command_reads_everything_again_after_a_damaged_copy(
     assert (
         decode_copy((tmp_path / COPY_OBJECT).read_bytes()).agencies[0].title == "Police Commission"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_page_from_the_copy_carries_its_text_date_and_the_copy_rules() -> None:
+    made = await first_copy()
+
+    news = sfgov_copy.page_from_copy(made, page_id=110692)
+    meeting = sfgov_copy.page_from_copy(made, page_id=110632)
+
+    (row,) = news.result.rows
+    assert list(row) == list(sfgov.PAGE_TEXT_FIELDS)
+    assert row["agency"] == "Office of the Mayor" and row["text"].startswith("SAN FRANCISCO")
+    assert row["cancelled"] is None
+    assert news.result.completeness == Completeness.LIMITED
+    assert news.result.query_url is None
+    assert news.result.source_updated_at == NOW.isoformat()
+    assert news.warnings[0].startswith("FROM THE DAILY COPY.")
+    assert news.warnings[1:] == [sfgov.PAGE_TEXT_WARNING, sfgov.UNDOCUMENTED_WARNING]
+    assert news.rules[0].startswith("FROM A DAILY COPY, NOT LIVE.")
+    assert news.rules[-1] == sfgov.PAGE_TEXT_RULE
+    assert news.escalations == ["SFGOV_DAILY_COPY"]
+    assert meeting.result.rows[0]["date"] == "2026-12-02"
+    assert meeting.result.rows[0]["cancelled"] is False
+    assert meeting.result.rows[0]["text"].startswith("General Public Comment")
+    assert meeting.result.completeness == Completeness.LIMITED
+
+
+@pytest.mark.asyncio
+async def test_a_page_outside_the_copy_or_without_text_says_so() -> None:
+    made = await first_copy()
+    made.news[0].text = None
+
+    with pytest.raises(SourceQueryError) as caught:
+        sfgov_copy.page_from_copy(made, page_id=999)
+    missing_text = sfgov_copy.page_from_copy(made, page_id=made.news[0].page_id)
+
+    assert caught.value.code == "NOT_FOUND" and caught.value.argument == "page_id"
+    assert "Police Commission; Office of the Mayor" in caught.value.public_message
+    assert missing_text.result.completeness == Completeness.TRUNCATED
+    assert missing_text.result.rows[0]["text"] is None
+    assert any(w.startswith("PARTIAL: the copy could not read") for w in missing_text.warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_page_in_the_copy_tells_empty_from_unread() -> None:
+    made = await first_copy()
+    empty = next(item for item in made.meetings if item.page_id == 103689)
+    empty.text = ""
+    unread = next(item for item in made.meetings if item.page_id == 110632)
+    unread.agenda_unread = 1
+
+    blank = sfgov_copy.page_from_copy(made, page_id=103689)
+    partial = sfgov_copy.page_from_copy(made, page_id=110632)
+
+    assert blank.result.completeness == Completeness.LIMITED
+    assert (
+        "SF.gov showed no overview or agenda text on this page when the copy was taken."
+        in blank.warnings
+    )
+    assert "SF.gov marks this meeting cancelled." in blank.warnings
+    assert partial.result.completeness == Completeness.TRUNCATED
+    assert any(w.startswith("PARTIAL: 1 agenda block on this page has") for w in partial.warnings)
+
+
+@pytest.mark.asyncio
+async def test_the_copy_keeps_agenda_blocks_it_could_not_read() -> None:
+    meetings = copying.deepcopy(MEETINGS["items"])
+    meetings[0]["agenda"].append({"type": "agenda_section", "value": {}})
+    handler, _ = site(meetings=meetings)
+
+    made, _ = await sync_copy(source_for(handler), AGENCIES, None, now=lambda: NOW)
+
+    assert made is not None
+    page = next(item for item in made.meetings if item.page_id == meetings[0]["id"])
+    assert page.agenda_unread == 1
+
+
+@pytest.mark.asyncio
+async def test_reused_text_keeps_the_date_it_was_read() -> None:
+    previous = await first_copy()
+    assert all(item.text_read_at == NOW for item in previous.news)
+    handler, requests = site()
+
+    made, _ = await sync_copy(source_for(handler), AGENCIES, previous, now=lambda: LATER)
+
+    assert made is not None
+    assert [r.url.path for r in requests if r.url.path != "/api/v2/pages/"] == []
+    assert all(item.text_read_at == NOW for item in made.news)
+    answer = sfgov_copy.page_from_copy(made, page_id=110692)
+    assert answer.result.source_updated_at == LATER.isoformat()
+    assert answer.result.query.endswith(f"text read {NOW.isoformat()}")
+    assert any(
+        warning.startswith("The copy read this page's text on 2026-11-27.")
+        for warning in answer.warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_from_a_copy_without_its_read_date_is_read_again() -> None:
+    previous = await first_copy()
+    for item in previous.news:
+        item.text_read_at = None
+    handler, requests = site()
+
+    made, _ = await sync_copy(source_for(handler), AGENCIES, previous, now=lambda: LATER)
+
+    assert made is not None
+    texts = [r for r in requests if r.url.path != "/api/v2/pages/"]
+    assert len(texts) == len(previous.news)
+    assert all(item.text_read_at == LATER for item in made.news)
+
+
+@pytest.mark.asyncio
+async def test_a_page_held_twice_answers_from_the_agency_read_last() -> None:
+    made = await first_copy()
+    moved = made.news[0].model_copy(update={"agency_id": 3005, "title": "Moved"})
+    made.news.append(moved)
+    made.agencies[0].copied_at = LATER
+    assert made.agencies[0].page_id == 3005
+
+    answer = sfgov_copy.page_from_copy(made, page_id=moved.page_id)
+    made.news.append(moved.model_copy(update={"agency_id": 1}))
+    with pytest.raises(SourceError) as caught:
+        sfgov_copy.page_from_copy(made, page_id=moved.page_id)
+
+    assert answer.result.rows[0]["title"] == "Moved"
+    assert answer.result.rows[0]["agency"] == "Police Commission"
+    assert not isinstance(caught.value, SourceQueryError)
+
+
+@pytest.mark.asyncio
+async def test_the_page_tool_turns_to_the_copy_when_the_site_gives_no_data(
+    tmp_path: Path,
+) -> None:
+    source, requests = await copy_backed_source(tmp_path, lambda: httpx.Response(202))
+
+    found = await source.get_page(page_id=110692).run()
+
+    assert found.result.dataset_id == "sfgov-copy/page"
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_pages_outside_the_copy_leave_a_blocking_site_alone(tmp_path: Path) -> None:
+    now = 100.0
+    source, requests = await copy_backed_source(
+        tmp_path, lambda: httpx.Response(202, text=""), clock=lambda: now
+    )
+
+    for _ in range(3):
+        with pytest.raises(SourceQueryError) as caught:
+            await source.get_page(page_id=999).run()
+        assert caught.value.code == "NOT_FOUND"
+    assert len(requests) == 1
+
+    now += sfgov.LIVE_RETRY_SECONDS + 1
+    with pytest.raises(SourceQueryError):
+        await source.get_page(page_id=999).run()
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_empty_news_page_is_told_apart_from_an_unread_one() -> None:
+    def empty_body(request: httpx.Request) -> httpx.Response | None:
+        if request.url.path == "/api/v2/pages/110692/":
+            return httpx.Response(200, json=NEWS_PAGE | {"body": "<p> </p>"})
+        return None
+
+    handler, _ = site(override=empty_body)
+    made, _ = await sync_copy(source_for(handler), AGENCIES, None, now=lambda: NOW)
+
+    assert made is not None
+    stored = next(item for item in made.news if item.page_id == 110692)
+    assert stored.text == "" and stored.text_read_at == NOW
+    answer = sfgov_copy.page_from_copy(made, page_id=110692)
+    assert answer.result.completeness == Completeness.LIMITED
+    assert "SF.gov showed no body text on this page when the copy was taken." in answer.warnings
+    assert not any(warning.startswith("PARTIAL") for warning in answer.warnings)
+
+
+@pytest.mark.asyncio
+async def test_copy_text_loses_control_characters_on_the_way_out() -> None:
+    made = await first_copy()
+    made.news[0].text = "Hello \u202eevil\x1b[2J\nnext"
+
+    answer = sfgov_copy.page_from_copy(made, page_id=made.news[0].page_id)
+
+    assert answer.result.rows[0]["text"] == "Hello evil[2J\nnext"
+
+
+@pytest.mark.asyncio
+async def test_a_copy_in_the_earlier_format_is_refused() -> None:
+    made = await first_copy()
+    old = json.loads(made.model_dump_json())
+    old["format"] = 1
+    for item in old["news"]:
+        del item["text_read_at"]
+    for item in old["meetings"]:
+        del item["agenda_unread"]
+
+    with pytest.raises(SourceError):
+        decode_copy(gzip.compress(json.dumps(old).encode()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [None, b"not a copy"])
+async def test_without_a_usable_copy_each_lookup_tries_the_site(
+    tmp_path: Path, stored: bytes | None
+) -> None:
+    now = 100.0
+    store = LocalCopyStore(tmp_path)
+    if stored is not None:
+        (tmp_path / COPY_OBJECT).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / COPY_OBJECT).write_bytes(stored)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(202, text="")
+
+    source = source_for(handler, copy=CopyReader(store), clock=lambda: now)
+
+    for _ in range(3):
+        with pytest.raises(SourceError):
+            await source.get_page(page_id=110692).run()
+
+    # A copy the server cannot read counts as no copy, and with no copy to answer from,
+    # trying the site is the only way to an answer.
+    assert len(requests) == 3
