@@ -133,6 +133,8 @@ To install it:
 2. Double-click the file, or drag it into the Claude Desktop window. You can also open Settings, Extensions, Advanced settings, Install Extension, and choose the file.
 3. Click Install, then ask a question about an SF.gov agency, such as "What did the Mayor's office announce last week?"
 
+The extension is not packed into the Claude plugin. On 2026-11-27 Claude Code 2.1.332 loaded only `python`, `node`, and `binary` bundles from a plugin, so a plugin copy would need uv installed on each computer, and chat on the web, in the desktop app, and on mobile does not load a plugin's local servers. The plugin's skill tells the assistant to prefer the extension's live tools whenever they are present.
+
 A Claude Team or Enterprise owner can offer it to every member: open Organization settings, Connectors, and the Desktop tab; click Add custom extension and choose the file; then open its menu under Custom team extensions and choose Add to team. Members then install it with one click. For a new version, raise the version in `extensions/sfgov-desktop/manifest.json`, rebuild, and use Upload new version from the same menu.
 
 To build the file from this repository:
