@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 from collections.abc import Callable
 from datetime import date
@@ -768,6 +769,230 @@ async def test_an_unreadable_site_leaves_the_api_answer_or_error(answer: httpx.R
     assert caught.value.code == "SOURCE_UNAVAILABLE"
     assert "Try again in a minute" in caught.value.public_message
     assert "setting on the jurisdiction's side" in caught.value.public_message
+
+
+# --- Why a page read failed, in the server's log ----------------------------------------
+
+LOGGER = "opencivicquery.sources.legistar"
+
+
+def unread_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == LOGGER and record.levelno == logging.WARNING
+    ]
+
+
+def assert_private(line: str) -> None:
+    """A log line names no search text, page address, cookie, or page content."""
+    for text in (
+        "housing",
+        "260875",
+        "zoning",
+        "legistar.com",
+        "Legislation.aspx",
+        "?",
+        "abc123",
+        MATTER_GUID,
+        "Maintenance",
+        "<",
+    ):
+        assert text not in line
+
+
+@pytest.mark.asyncio
+async def test_a_page_step_that_times_out_names_the_step_and_where_the_request_stalled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(legistar_module, "PAGE_TIMEOUT_SECONDS", 0.3)
+    site = Site()
+
+    async def switch_stalls(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            # The events httpcore reports for a request whose answer never comes.
+            trace = request.extensions["trace"]
+            await trace("http11.send_request_headers.started", {})
+            await trace("http11.send_request_body.started", {})
+            await trace("http11.receive_response_headers.started", {})
+            try:
+                await asyncio.sleep(5)
+            finally:
+                await trace("http11.receive_response_headers.failed", {})
+                await trace("http11.response_closed.started", {})
+                await trace("http11.response_closed.complete", {})
+        return site.site_answer(request)
+
+    site.answers[pages.SEARCH_PATH] = switch_stalls
+
+    found = await asyncio.wait_for(
+        site.legistar().search_legislation(**HOUSING_SEARCH).run(), timeout=3
+    )
+
+    assert found.warnings[:2] == [stale_warning("sfgov", STALE), SITE_UNREAD_WARNING]
+    [line] = unread_lines(caplog)
+    assert line.startswith(
+        "Legistar pages of sfgov unread, the answer falls back to the API copy: timeout at "
+        "advanced search switch POST after 0."
+    )
+    # The cleanup after the timeout is not where the request stalled.
+    assert "s (network phase http11.receive_response_headers); earlier steps: " in line
+    assert "earlier steps: date check 0.0s, page turn 0.0s, search page GET 0.0s;" in line
+    assert line.endswith("; page read allowed 0.3s")
+    assert_private(line)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (httpx.Response(503, text="busy"), "HTTP status 503 at search page GET after 0.0s;"),
+        (
+            httpx.Response(302, headers={"Location": "https://example.org/Legislation.aspx"}),
+            "HTTP status 302 at search page GET after 0.0s;",
+        ),
+        (
+            httpx.Response(200, text="<html><body>Maintenance</body></html>"),
+            "unexpected page structure at search page GET after 0.0s (The Legistar "
+            "legislation page has no search form);",
+        ),
+        (
+            httpx.ConnectError("refused"),
+            "connection failed at search page GET after 0.0s (network phase connection pool; "
+            "ConnectError);",
+        ),
+    ],
+)
+async def test_each_kind_of_unread_site_leaves_one_line_with_its_reason(
+    answer: httpx.Response | Exception, reason: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    stale, broken = Site(), Site(api="setting")
+    stale.answers[pages.SEARCH_PATH] = broken.answers[pages.SEARCH_PATH] = respond
+
+    await stale.legistar().search_legislation(client="sfgov", text="housing").run()
+    with pytest.raises(SourceQueryError):
+        await broken.legistar().search_legislation(client="sfgov", text="housing").run()
+
+    fallback, error = unread_lines(caplog)
+    assert fallback.startswith(
+        f"Legistar pages of sfgov unread, the answer falls back to the API copy: {reason}"
+    )
+    assert error.startswith(f"Legistar pages of sfgov unread, the call returns an error: {reason}")
+    for line in (fallback, error):
+        assert "earlier steps: date check 0.0s, page turn 0.0s; page read allowed " in line
+        assert_private(line)
+
+
+@pytest.mark.asyncio
+async def test_a_page_too_large_reads_as_a_failed_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    site = Site()
+    legistar = site.legistar()
+    legistar._http._max_response_bytes = 1000
+
+    found = await legistar.search_legislation(**HOUSING_SEARCH).run()
+
+    assert SITE_UNREAD_WARNING in found.warnings
+    [line] = unread_lines(caplog)
+    assert ": request failed at search page GET after 0.0s (network phase connection pool; " in (
+        line
+    )
+    assert "response exceeded the size limit);" in line
+    assert_private(line)
+
+
+@pytest.mark.asyncio
+async def test_a_library_timeout_on_the_file_number_search_is_a_timeout_at_that_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    site = Site()
+
+    def file_search_times_out(request: httpx.Request) -> httpx.Response:
+        form = form_of(request) if request.method == "POST" else {}
+        if form.get("ctl00$ContentPlaceHolder1$txtFil"):
+            raise httpx.ReadTimeout("no answer", request=request)
+        return site.site_answer(request)
+
+    site.answers[pages.SEARCH_PATH] = file_search_times_out
+
+    found = await site.legistar().search_legislation(client="sfgov", text="260875").run()
+
+    assert SITE_UNREAD_WARNING in found.warnings
+    [line] = unread_lines(caplog)
+    assert ": timeout at file number search POST after 0.0s (network phase connection pool; " in (
+        line
+    )
+    assert line.endswith(
+        "ReadTimeout); earlier steps: date check 0.0s, page turn 0.0s, search page GET 0.0s, "
+        "advanced search switch POST 0.0s; page read allowed 25.0s"
+    )
+    assert_private(line)
+
+
+@pytest.mark.asyncio
+async def test_waiting_out_the_turn_and_a_spent_budget_are_told_apart(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(legistar_module, "PAGE_TIMEOUT_SECONDS", 0.2)
+    site = Site()
+    legistar = site.legistar()
+
+    # Another call holds the one page-reading turn for longer than this call may wait.
+    await legistar._page_lock.acquire()
+    try:
+        waited = await legistar.search_legislation(**HOUSING_SEARCH).run()
+    finally:
+        legistar._page_lock.release()
+
+    monkeypatch.setattr(legistar_module, "CALL_BUDGET_SECONDS", 0.05)
+
+    class SlowApi(Site):
+        async def handle(self, request: httpx.Request) -> httpx.Response:
+            if request.url.host == LEGISTAR_HOST:
+                await asyncio.sleep(0.1)
+            return await super().handle(request)
+
+    slow = SlowApi()
+    spent = await slow.legistar().search_legislation(**HOUSING_SEARCH).run()
+
+    assert site.site_requests == slow.site_requests == []
+    assert SITE_UNREAD_WARNING in waited.warnings and SITE_UNREAD_WARNING in spent.warnings
+    wait_line, spent_line = unread_lines(caplog)
+    assert ": lock wait exceeded at page turn after 0." in wait_line
+    assert "s; earlier steps: date check 0.0s; page read allowed 0.2s" in wait_line
+    assert ": call budget spent at page turn after 0.0s; earlier steps: date check 0.0s;" in (
+        spent_line
+    )
+    assert "; page read allowed -" in spent_line
+
+
+@pytest.mark.asyncio
+async def test_dates_the_page_cannot_search_are_logged_as_such_and_a_read_page_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    site = Site()
+
+    await site.legistar().search_legislation(**HOUSING_SEARCH).run()
+    assert unread_lines(caplog) == []
+    await (
+        site.legistar()
+        .search_legislation(client="sfgov", text="zoning", introduced_to="1979-12-31")
+        .run()
+    )
+
+    [line] = unread_lines(caplog)
+    assert line.startswith(
+        "Legistar pages of sfgov unread, the answer falls back to the API copy: dates outside "
+        "the page's range at date check after 0.0s (The dates lie outside what the Legistar "
+        "search page accepts); earlier steps: none; page read allowed "
+    )
+    assert_private(line)
 
 
 @pytest.mark.asyncio

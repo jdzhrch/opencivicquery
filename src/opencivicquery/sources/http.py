@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -71,13 +72,15 @@ class FixedHostClient:
         json_body: Any = None,
         form_body: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
+        trace: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[int, httpx.Headers, bytes]:
         """Return the status code, response headers, and body.
 
         headers override the defaults for this request only. form_body is sent as an HTML
         form post. A request carries only the cookies its caller names: the client keeps
         whatever cookies sources set, and one caller's answer must never shape another
-        caller's request.
+        caller's request. trace, when given, receives the name of each network event of
+        this request, such as http11.send_request_body.started.
         """
         request = self._client.build_request(
             method,
@@ -86,6 +89,7 @@ class FixedHostClient:
             json=json_body,
             data=form_body,
             headers={**self._headers, **(headers or {})},
+            extensions={"trace": trace} if trace is not None else None,
         )
         if not any(name.lower() == "cookie" for name in headers or {}):
             request.headers.pop("cookie", None)

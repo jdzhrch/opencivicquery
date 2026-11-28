@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import unicodedata
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -30,8 +31,16 @@ import httpx
 
 from opencivicquery.models import Completeness, SourceQueryResult
 from opencivicquery.sources import legistar_pages as pages
-from opencivicquery.sources.base import Lookup, PreparedLookup, SourceError, SourceQueryError
+from opencivicquery.sources.base import (
+    Lookup,
+    PreparedLookup,
+    SourceError,
+    SourceQueryError,
+    SourceUnreachable,
+)
 from opencivicquery.sources.http import FixedHostClient
+
+logger = logging.getLogger(__name__)
 
 LEGISTAR_HOST = "webapi.legistar.com"
 _BASE = f"https://{LEGISTAR_HOST}/v1"
@@ -579,6 +588,94 @@ def _page_deadline(started: float) -> float:
     """When page reading must end for a call that began at started, on the loop's clock."""
     now = asyncio.get_running_loop().time()
     return min(now + PAGE_TIMEOUT_SECONDS, started + CALL_BUDGET_SECONDS)
+
+
+class PageStatusError(SourceError):
+    """A page of the client's site answered with a status other than 200."""
+
+    def __init__(self, path: str, status: int) -> None:
+        super().__init__(f"The Legistar page {path} answered HTTP {status}")
+        self.status = status
+
+
+DATE_CHECK = "date check"
+DATE_REASON = "dates outside the page's range"
+PAGE_TURN = "page turn"
+
+
+class _PageSteps:
+    """How far one page read got, for the log line that says why it failed.
+
+    It holds fixed step names, timings, and the network phase of the request under way;
+    never the search text, a page address with its query, or page content.
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self.step = DATE_CHECK
+        self.since = self._loop.time()
+        self.allowed: float | None = None
+        """Seconds the page read had from its start, which the call's budget may cut."""
+        self.done: list[str] = []
+        self.network: str | None = None
+        """The network phase of the request under way, or None outside a request."""
+
+    def start(self, step: str) -> None:
+        now = self._loop.time()
+        self.done.append(f"{self.step} {now - self.since:.1f}s")
+        self.step, self.since, self.network = step, now, None
+
+    async def trace(self, event: str, info: dict[str, Any]) -> None:
+        """httpx's trace hook: keep the phase the request has entered.
+
+        The response_closed cleanup a failed request runs is not a phase it stalled in,
+        so it never replaces one.
+        """
+        if event.endswith(".started") and not event.endswith(".response_closed.started"):
+            self.network = event.removesuffix(".started")
+
+    def reason(self, failure: BaseException) -> str:
+        code = getattr(failure, "code", None)
+        late = isinstance(failure, TimeoutError) or code == "SOURCE_TIMEOUT"
+        if late and self.step == PAGE_TURN:
+            return "call budget spent" if (self.allowed or 0.0) <= 0 else "lock wait exceeded"
+        if late:
+            return "timeout"
+        if isinstance(failure, SourceUnreachable):
+            return "connection failed"
+        if isinstance(failure, PageStatusError):
+            return f"HTTP status {failure.status}"
+        if self.network is not None:
+            return "request failed"
+        if self.step == DATE_CHECK:
+            return DATE_REASON
+        return "unexpected page structure"
+
+    def describe(self, failure: BaseException) -> str:
+        """One line: the reason, the step and its time, then the steps before it."""
+        elapsed = self._loop.time() - self.since
+        reason = self.reason(failure)
+        details = []
+        if self.network is not None:
+            details.append(f"network phase {self.network}")
+        if isinstance(failure.__cause__, httpx.HTTPError):
+            # The class says what broke, such as ConnectError or ReadTimeout.
+            details.append(type(failure.__cause__).__name__)
+        elif reason in {"request failed", "unexpected page structure", DATE_REASON}:
+            # These messages are fixed text in this server's code, never page content.
+            details.append(str(failure))
+        line = f"{reason} at {self.step} after {elapsed:.1f}s"
+        if details:
+            line += f" ({'; '.join(details)})"
+        line += f"; earlier steps: {', '.join(self.done) or 'none'}"
+        if self.allowed is not None:
+            line += f"; page read allowed {self.allowed:.1f}s"
+        return line
+
+
+def _log_unread(client: str, outcome: str, steps: _PageSteps, failure: BaseException) -> None:
+    """The one warning line a failed page read leaves in the server's log."""
+    logger.warning("Legistar pages of %s unread, %s: %s", client, outcome, steps.describe(failure))
 
 
 def _invalid(argument: str, message: str) -> SourceQueryError:
@@ -1332,28 +1429,36 @@ class Legistar:
         form: dict[str, str] | None = None,
         jar: dict[str, str] | None = None,
         learn: bool = False,
+        steps: _PageSteps | None = None,
     ) -> str:
         """Fetch one page of the client's own Legistar site and return its HTML.
 
         The host is always <client>.legistar.com and the path one of four page types; no
         part of the address comes from page content. jar holds the cookies this call has
         received from the site, and they travel back only to that site within the call.
+        steps, when given, follows the request's network phases.
         """
         if path not in pages.PAGE_PATHS:
             raise SourceError("That Legistar page is not one this server reads")
         headers = {"Accept": "text/html"}
         if jar:
             headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in jar.items())
+        if steps is not None:
+            # Until the first network event, the request waits for a pooled connection.
+            steps.network = "connection pool"
         status, answer, content = await self._http.send_with_headers(
             "POST" if form is not None else "GET",
             f"{pages.site(client)}/{path}",
             params=params,
             form_body=form,
             headers=headers,
+            trace=steps.trace if steps is not None else None,
         )
+        if steps is not None:
+            steps.network = None
         if status != 200:
             # A redirect is never followed; it reads as a failure here.
-            raise SourceError(f"The Legistar page {path} answered HTTP {status}")
+            raise PageStatusError(path, status)
         if learn and jar is not None:
             _keep_cookies(jar, answer)
         return content.decode("utf-8", "replace")
@@ -1555,15 +1660,17 @@ class Legistar:
         count: int,
         reason: str,
         started: float,
+        steps: _PageSteps,
     ) -> Lookup:
         """Legislation from the client's public search page and matter pages.
 
         The search runs by title and, when the text holds a digit, by file or enactment
         number too. Only the first view of each search is read. The matter pages of the
         first matters listed are then read for sponsors, and for the action history of a
-        matter whose file number is the text itself.
+        matter whose file number is the text itself. steps records how far the read got.
         """
         deadline = _page_deadline(started)
+        steps.allowed = deadline - asyncio.get_running_loop().time()
         span = None
         if first or last:
             span = (
@@ -1576,13 +1683,16 @@ class Legistar:
         searches = [pages.Criteria(title=text, **dates)]
         if any(character.isdigit() for character in text):
             searches.insert(0, pages.Criteria(file=text, **dates))
+        steps.start(PAGE_TURN)
         async with self._page_turn(deadline):
             async with asyncio.timeout_at(deadline):
                 jar: dict[str, str] = {}
+                steps.start("search page GET")
                 form = pages.parse_search_form(
-                    await self._page(client, pages.SEARCH_PATH, jar=jar, learn=True)
+                    await self._page(client, pages.SEARCH_PATH, jar=jar, learn=True, steps=steps)
                 )
                 if not form.advanced:
+                    steps.start("advanced search switch POST")
                     form = pages.parse_search_form(
                         await self._page(
                             client,
@@ -1590,12 +1700,14 @@ class Legistar:
                             form=pages.switch_fields(form),
                             jar=jar,
                             learn=True,
+                            steps=steps,
                         )
                     )
                 if not form.advanced:
                     raise SourceError("The Legistar legislation page has no advanced search")
                 answers = []
                 for criteria in searches:
+                    steps.start(f"{'file number' if criteria.file else 'title'} search POST")
                     # Each search posts the same form and cookies, so one search's
                     # criteria never carry into the next.
                     html = await self._page(
@@ -1603,8 +1715,10 @@ class Legistar:
                         pages.SEARCH_PATH,
                         form=pages.search_fields(form, criteria),
                         jar=jar,
+                        steps=steps,
                     )
                     answers.append(pages.parse_search_results(client, html, criteria))
+            steps.start("matter pages")
             found: dict[int, dict[str, Any]] = {}
             exact: set[int] = set()
             for criteria, answer in zip(searches, answers, strict=True):
@@ -1879,11 +1993,13 @@ class Legistar:
                 check.cancel()
                 if error.code != "CLIENT_MISCONFIGURED":
                     raise
+                steps = _PageSteps()
                 try:
                     return await self._web_legislation(
-                        name, words, first, last, count, SETTING_REASON, started
+                        name, words, first, last, count, SETTING_REASON, started, steps
                     )
                 except (SourceError, TimeoutError) as failure:
+                    _log_unread(name, "the call returns an error", steps, failure)
                     raise _pages_unread(name, SETTING_REASON, failure) from failure
             except BaseException:
                 check.cancel()
@@ -1893,13 +2009,15 @@ class Legistar:
             stale = newest is not None and newest < self._today() - STALE_AFTER
             site_unread = False
             if stale and newest is not None:
+                steps = _PageSteps()
                 try:
                     return await self._web_legislation(
-                        name, words, first, last, count, stale_reason(newest), started
+                        name, words, first, last, count, stale_reason(newest), started, steps
                     )
-                except (SourceError, TimeoutError):
+                except (SourceError, TimeoutError) as failure:
                     # The site could not be read, so the API's older copy stands below,
                     # under its warning that it has stopped updating.
+                    _log_unread(name, "the answer falls back to the API copy", steps, failure)
                     site_unread = True
             rows = []
             for record in records[:count]:
